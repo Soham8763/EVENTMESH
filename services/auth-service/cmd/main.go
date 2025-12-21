@@ -3,17 +3,19 @@ package main
 import (
 	"log"
 	"net/http"
+
+	"eventmesh/auth-service/internal/db"
+	handler "eventmesh/auth-service/internal/http"
+	"eventmesh/auth-service/internal/repository"
 )
 
 func main() {
-	log.Println("auth-service starting on :8081")
+	dbConn := db.NewPostgres()
+	repo := repository.NewAPIKeyRepository(dbConn)
+	h := handler.NewHandler(repo)
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
-	})
+	http.HandleFunc("/validate", h.ValidateAPIKey)
 
-	if err := http.ListenAndServe(":8081", nil); err != nil {
-		log.Fatalf("failed to start server: %v", err)
-	}
+	log.Println("auth-service running on :8081")
+	log.Fatal(http.ListenAndServe(":8081", nil))
 }

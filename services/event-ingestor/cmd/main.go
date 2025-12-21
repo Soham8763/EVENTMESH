@@ -3,17 +3,17 @@ package main
 import (
 	"log"
 	"net/http"
+
+	"eventmesh/event-ingestor/internal/api"
+	"eventmesh/event-ingestor/internal/auth"
 )
 
 func main() {
-	log.Println("event-ingestor starting on :8082")
+	authClient := auth.NewClient("http://localhost:8081")
+	handler := api.NewHandler(authClient)
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
-	})
+	http.HandleFunc("/events", handler.IngestEvent)
 
-	if err := http.ListenAndServe(":8082", nil); err != nil {
-		log.Fatalf("failed to start server: %v", err)
-	}
+	log.Println("event-ingestor running on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }

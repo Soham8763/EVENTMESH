@@ -3,14 +3,22 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"eventmesh/event-ingestor/internal/api"
 	"eventmesh/event-ingestor/internal/auth"
+	"eventmesh/event-ingestor/internal/idempotency"
 )
 
 func main() {
 	authClient := auth.NewClient("http://localhost:8081")
-	handler := api.NewHandler(authClient)
+
+	idempotencyStore := idempotency.NewStore(
+		"localhost:6379",
+		5*time.Minute,
+	)
+
+	handler := api.NewHandler(authClient, idempotencyStore)
 
 	http.HandleFunc("/events", handler.IngestEvent)
 

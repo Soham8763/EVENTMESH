@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: eventmesh-postgres
+    environment:
+      POSTGRES_USER: eventmesh
+      POSTGRES_PASSWORD: eventmesh
+      POSTGRES_DB: eventmesh
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: eventmesh-redis
+    ports:
+      - "6379:6379"
+
+  redpanda:
+    image: redpandadata/redpanda:v23.3.3
+    container_name: eventmesh-redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - "1G"
+      - --reserve-memory
+      - "0M"
+      - --node-id
+      - "0"
+      - --check=false
+    ports:
+      - "19092:9092"
+      - "9644:9644"
+
+volumes:
+  postgres_data:

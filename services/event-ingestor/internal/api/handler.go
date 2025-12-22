@@ -11,17 +11,20 @@ import (
 	"eventmesh/event-ingestor/internal/auth"
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/model"
+	"eventmesh/event-ingestor/internal/producer"
 )
 
 type Handler struct {
 	authClient       *auth.Client
 	idempotencyStore *idempotency.Store
+	producer         *producer.Producer
 }
 
-func NewHandler(authClient *auth.Client, idempotencyStore *idempotency.Store) *Handler {
+func NewHandler(authClient *auth.Client, idempotencyStore *idempotency.Store, producer *producer.Producer) *Handler {
 	return &Handler{
 		authClient:       authClient,
 		idempotencyStore: idempotencyStore,
+		producer:         producer,
 	}
 }
 
@@ -98,8 +101,13 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		Payload:        req.Payload,
 	}
 
-	// TODO: Publish envelope to Redpanda/Kafka
-	log.Printf("event accepted: %+v\n", envelope)
+	// 6.5. Publish envelope to Redpanda/Kafka
+	if err := h.producer.Publish(tenantID, envelope); err != nil {
+		log.Printf("failed to publish event: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	log.Printf("event published: %+v\n", envelope)
 
 	// 7. Set Redis key (TTL)
 	if err := h.idempotencyStore.Set(ctx, idempotencyKey); err != nil {

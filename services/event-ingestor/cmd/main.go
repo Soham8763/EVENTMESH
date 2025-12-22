@@ -8,6 +8,7 @@ import (
 	"eventmesh/event-ingestor/internal/api"
 	"eventmesh/event-ingestor/internal/auth"
 	"eventmesh/event-ingestor/internal/idempotency"
+	"eventmesh/event-ingestor/internal/producer"
 )
 
 func main() {
@@ -18,7 +19,19 @@ func main() {
 		5*time.Minute,
 	)
 
-	handler := api.NewHandler(authClient, idempotencyStore)
+	eventProducer, err := producer.NewProducer(
+		[]string{"localhost:19092"},
+		"events",
+	)
+	if err != nil {
+		log.Fatalf("failed to create producer: %v", err)
+	}
+
+	handler := api.NewHandler(
+		authClient,
+		idempotencyStore,
+		eventProducer,
+	)
 
 	http.HandleFunc("/events", handler.IngestEvent)
 

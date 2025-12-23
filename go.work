@@ -3,4 +3,5 @@ go 1.25.5
 use (
 	./services/auth-service
 	./services/event-ingestor
+	./services/rule-engine
 )

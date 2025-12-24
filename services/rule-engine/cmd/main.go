@@ -7,6 +7,7 @@ import (
 	"os/signal"
 
 	"eventmesh/rule-engine/internal/consumer"
+	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/repository"
 )
 
@@ -22,10 +23,13 @@ func main() {
 	}
 	log.Printf("loaded %d active rules\n", len(rules))
 
+	m := matcher.NewMatcher(rules)
+
 	eventConsumer, err := consumer.NewEventConsumer(
 		[]string{"localhost:19092"},
 		"rule-engine-group",
 		"events",
+		m,
 	)
 	if err != nil {
 		log.Fatalf("failed to create consumer: %v", err)

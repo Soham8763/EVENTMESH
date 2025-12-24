@@ -4,23 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/model"
+	"eventmesh/rule-engine/internal/producer"
 
 	"github.com/IBM/sarama"
+	"github.com/google/uuid"
 )
 
 type EventConsumer struct {
-	group   sarama.ConsumerGroup
-	topic   string
-	matcher *matcher.Matcher
+	group    sarama.ConsumerGroup
+	topic    string
+	matcher  *matcher.Matcher
+	producer *producer.Producer
 }
 
 func NewEventConsumer(
 	brokers []string,
 	groupID, topic string,
 	matcher *matcher.Matcher,
+	producer *producer.Producer,
 ) (*EventConsumer, error) {
 	cfg := sarama.NewConfig()
 	cfg.Version = sarama.V2_1_0_0
@@ -32,9 +37,10 @@ func NewEventConsumer(
 	}
 
 	return &EventConsumer{
-		group:   group,
-		topic:   topic,
-		matcher: matcher,
+		group:    group,
+		topic:    topic,
+		matcher:  matcher,
+		producer: producer,
 	}, nil
 }
 
@@ -72,21 +78,25 @@ func (c *EventConsumer) ConsumeClaim(
 
 		matches := c.matcher.Match(event)
 
-		if len(matches) == 0 {
-			log.Printf(
-				"no rules matched for event_id=%s event_type=%s",
-				event.EventID,
-				event.EventType,
-			)
-		} else {
-			for _, match := range matches {
-				log.Printf(
-					"rule matched: rule_id=%s workflow=%s event_id=%s",
-					match.RuleID,
-					match.WorkflowName,
-					match.EventID,
-				)
+		for _, match := range matches {
+			trigger := model.WorkflowTriggerEvent{
+				TriggerID:    uuid.New().String(),
+				EventID:      match.EventID,
+				TenantID:     match.TenantID,
+				WorkflowName: match.WorkflowName,
+				TriggeredAt:  time.Now().UTC(),
 			}
+
+			if err := c.producer.Publish(trigger.TenantID, trigger); err != nil {
+				log.Printf("failed to emit trigger: %v", err)
+				continue
+			}
+
+			log.Printf(
+				"emitted workflow trigger: workflow=%s event_id=%s",
+				trigger.WorkflowName,
+				trigger.EventID,
+			)
 		}
 
 		session.MarkMessage(msg, "")

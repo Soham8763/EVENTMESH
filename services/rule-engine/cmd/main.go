@@ -8,6 +8,7 @@ import (
 
 	"eventmesh/rule-engine/internal/consumer"
 	"eventmesh/rule-engine/internal/matcher"
+	"eventmesh/rule-engine/internal/producer"
 	"eventmesh/rule-engine/internal/repository"
 )
 
@@ -25,11 +26,20 @@ func main() {
 
 	m := matcher.NewMatcher(rules)
 
+	p, err := producer.NewProducer(
+		[]string{"localhost:19092"},
+		"workflow_triggers",
+	)
+	if err != nil {
+		log.Fatalf("failed to create producer: %v", err)
+	}
+
 	eventConsumer, err := consumer.NewEventConsumer(
 		[]string{"localhost:19092"},
 		"rule-engine-group",
 		"events",
 		m,
+		p,
 	)
 	if err != nil {
 		log.Fatalf("failed to create consumer: %v", err)

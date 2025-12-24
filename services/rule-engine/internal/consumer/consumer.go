@@ -5,17 +5,23 @@ import (
 	"encoding/json"
 	"log"
 
+	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/model"
 
 	"github.com/IBM/sarama"
 )
 
 type EventConsumer struct {
-	group sarama.ConsumerGroup
-	topic string
+	group   sarama.ConsumerGroup
+	topic   string
+	matcher *matcher.Matcher
 }
 
-func NewEventConsumer(brokers []string, groupID, topic string) (*EventConsumer, error) {
+func NewEventConsumer(
+	brokers []string,
+	groupID, topic string,
+	matcher *matcher.Matcher,
+) (*EventConsumer, error) {
 	cfg := sarama.NewConfig()
 	cfg.Version = sarama.V2_1_0_0
 	cfg.Consumer.Offsets.Initial = sarama.OffsetOldest
@@ -26,8 +32,9 @@ func NewEventConsumer(brokers []string, groupID, topic string) (*EventConsumer, 
 	}
 
 	return &EventConsumer{
-		group: group,
-		topic: topic,
+		group:   group,
+		topic:   topic,
+		matcher: matcher,
 	}, nil
 }
 
@@ -62,6 +69,25 @@ func (c *EventConsumer) ConsumeClaim(
 			event.EventType,
 			event.TenantID,
 		)
+
+		matches := c.matcher.Match(event)
+
+		if len(matches) == 0 {
+			log.Printf(
+				"no rules matched for event_id=%s event_type=%s",
+				event.EventID,
+				event.EventType,
+			)
+		} else {
+			for _, match := range matches {
+				log.Printf(
+					"rule matched: rule_id=%s workflow=%s event_id=%s",
+					match.RuleID,
+					match.WorkflowName,
+					match.EventID,
+				)
+			}
+		}
 
 		session.MarkMessage(msg, "")
 	}

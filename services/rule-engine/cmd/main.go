@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
-	"net/http"
+	"os"
+	"os/signal"
 
+	"eventmesh/rule-engine/internal/consumer"
+	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/repository"
 )
 
@@ -17,15 +21,31 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load rules: %v", err)
 	}
-
 	log.Printf("loaded %d active rules\n", len(rules))
 
-	// Simple health endpoint to keep service alive
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
-	})
+	m := matcher.NewMatcher(rules)
 
-	log.Println("rule-engine running on :8083")
-	log.Fatal(http.ListenAndServe(":8083", nil))
+	eventConsumer, err := consumer.NewEventConsumer(
+		[]string{"localhost:19092"},
+		"rule-engine-group",
+		"events",
+		m,
+	)
+	if err != nil {
+		log.Fatalf("failed to create consumer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go eventConsumer.Start(ctx)
+
+	log.Println("rule-engine consuming from 'events' topic")
+
+	// Graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	<-sig
+
+	log.Println("rule-engine shutting down")
 }

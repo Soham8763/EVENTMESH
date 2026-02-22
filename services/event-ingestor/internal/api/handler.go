@@ -14,6 +14,10 @@ import (
 	"eventmesh/event-ingestor/internal/producer"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Handler struct {
@@ -36,7 +40,10 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	if requestID == "" {
 		requestID = uuid.New().String()
 	}
-	ctx := r.Context()
+
+	tr := otel.Tracer("event-ingestor")
+	ctx, span := tr.Start(r.Context(), "IngestEvent", trace.WithAttributes(attribute.String("request_id", requestID)))
+	defer span.End()
 
 	// 1. Extract API Key
 	apiKey := r.Header.Get("X-API-Key")
@@ -59,6 +66,7 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// 3. Decode + validate body
 	var req model.IngestEventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
@@ -108,7 +116,7 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6.5. Publish envelope to Redpanda/Kafka
-	if err := h.producer.Publish(tenantID, envelope); err != nil {
+	if err := h.producer.Publish(ctx, tenantID, req); err != nil {
 		logger.Log.Error("failed to publish event", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

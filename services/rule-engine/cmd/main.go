@@ -8,6 +8,7 @@ import (
 
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
+	"eventmesh/pkg/tracing"
 	"eventmesh/rule-engine/internal/consumer"
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/producer"
@@ -20,6 +21,9 @@ import (
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	shutdown := tracing.Init("rule-engine")
+	defer shutdown()
 
 	metrics.Init()
 

@@ -12,6 +12,8 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
 
@@ -62,6 +64,16 @@ func (c *EventConsumer) ConsumeClaim(
 ) error {
 
 	for msg := range claim.Messages() {
+		// Extract tracing context from headers
+		carrier := propagation.MapCarrier{}
+		for _, h := range msg.Headers {
+			carrier[string(h.Key)] = string(h.Value)
+		}
+		ctx := otel.GetTextMapPropagator().Extract(session.Context(), carrier)
+
+		tr := otel.Tracer("rule-engine")
+		ctx, span := tr.Start(ctx, "ProcessEvent")
+
 		var event model.EventEnvelope
 
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
@@ -86,7 +98,7 @@ func (c *EventConsumer) ConsumeClaim(
 				TriggeredAt:  time.Now().UTC(),
 			}
 
-			if err := c.producer.Publish(trigger.TenantID, trigger); err != nil {
+			if err := c.producer.Publish(ctx, trigger.TenantID, trigger); err != nil {
 				logger.Log.Error("failed to emit trigger", zap.Error(err))
 				continue
 			}
@@ -96,6 +108,7 @@ func (c *EventConsumer) ConsumeClaim(
 				zap.String("event_id", trigger.EventID))
 		}
 
+		span.End()
 		session.MarkMessage(msg, "")
 	}
 

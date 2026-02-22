@@ -8,6 +8,7 @@ import (
 	"eventmesh/auth-service/internal/repository"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
+	"eventmesh/pkg/tracing"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
@@ -16,6 +17,9 @@ import (
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	shutdown := tracing.Init("auth-service")
+	defer shutdown()
 
 	metrics.Init()
 

@@ -8,11 +8,13 @@ import (
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/IBM/sarama"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
 
 type ResultHandler interface {
-	HandleResult(model.TaskResult) error
+	HandleResult(ctx context.Context, result model.TaskResult) error
 }
 
 type ResultConsumer struct {
@@ -64,6 +66,12 @@ func (c *ResultConsumer) ConsumeClaim(
 ) error {
 
 	for msg := range claim.Messages() {
+		// Extract tracing context from headers
+		carrier := propagation.MapCarrier{}
+		for _, h := range msg.Headers {
+			carrier[string(h.Key)] = string(h.Value)
+		}
+		ctx := otel.GetTextMapPropagator().Extract(session.Context(), carrier)
 
 		var result model.TaskResult
 
@@ -73,7 +81,7 @@ func (c *ResultConsumer) ConsumeClaim(
 			continue
 		}
 
-		if err := c.engine.HandleResult(result); err != nil {
+		if err := c.engine.HandleResult(ctx, result); err != nil {
 			logger.Log.Error("result handling failed", zap.Error(err))
 			continue
 		}

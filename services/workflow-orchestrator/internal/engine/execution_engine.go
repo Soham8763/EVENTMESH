@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 
@@ -10,6 +11,8 @@ import (
 	"eventmesh/workflow-orchestrator/internal/producer"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -23,8 +26,17 @@ func NewExecutionEngine(db *sql.DB, p *producer.Producer) *ExecutionEngine {
 }
 
 func (e *ExecutionEngine) HandleTrigger(
+	ctx context.Context,
 	trigger model.WorkflowTriggerEvent,
 ) error {
+	tr := otel.Tracer("workflow-orchestrator")
+	ctx, span := tr.Start(ctx, "HandleTrigger")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("workflow", trigger.WorkflowName),
+		attribute.String("trigger_id", trigger.TriggerID),
+	)
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -99,10 +111,20 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	metrics.WorkflowsStarted.Inc()
 
-	return e.AdvanceExecution(execID)
+	return e.AdvanceExecution(ctx, execID)
 }
 
-func (e *ExecutionEngine) HandleResult(r model.TaskResult) error {
+func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) error {
+	tr := otel.Tracer("workflow-orchestrator")
+	ctx, span := tr.Start(ctx, "HandleResult")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("execution_id", r.WorkflowExecutionID),
+		attribute.String("step", r.StepName),
+		attribute.String("status", r.Status),
+	)
+
 	logger.Log.Info("handling task result",
 		zap.String("step", r.StepName),
 		zap.String("execution_id", r.WorkflowExecutionID),
@@ -186,7 +208,7 @@ func (e *ExecutionEngine) HandleResult(r model.TaskResult) error {
 	}
 
 	if r.Status == model.StepSuccess {
-		return e.AdvanceExecution(r.WorkflowExecutionID)
+		return e.AdvanceExecution(ctx, r.WorkflowExecutionID)
 	}
 
 	return nil

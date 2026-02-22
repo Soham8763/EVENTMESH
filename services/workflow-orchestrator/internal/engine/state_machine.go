@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -9,11 +10,17 @@ import (
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
-func (e *ExecutionEngine) AdvanceExecution(execID string) error {
-	logger.Log.Info("advancing execution", zap.String("execution_id", execID))
+func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string) error {
+	tr := otel.Tracer("workflow-orchestrator")
+	ctx, span := tr.Start(ctx, "AdvanceExecution")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("execution_id", execID))
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -107,7 +114,7 @@ func (e *ExecutionEngine) AdvanceExecution(execID string) error {
 		CreatedAt:           time.Now().UTC(),
 	}
 
-	if err := e.producer.Publish(task.TenantID, task); err != nil {
+	if err := e.producer.Publish(ctx, execID, task); err != nil {
 		return err
 	}
 

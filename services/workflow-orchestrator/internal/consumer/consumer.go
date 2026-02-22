@@ -8,11 +8,13 @@ import (
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/IBM/sarama"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
 
 type Engine interface {
-	HandleTrigger(trigger model.WorkflowTriggerEvent) error
+	HandleTrigger(ctx context.Context, trigger model.WorkflowTriggerEvent) error
 }
 
 type TriggerConsumer struct {
@@ -60,6 +62,12 @@ func (c *TriggerConsumer) ConsumeClaim(
 ) error {
 
 	for msg := range claim.Messages() {
+		// Extract tracing context from headers
+		carrier := propagation.MapCarrier{}
+		for _, h := range msg.Headers {
+			carrier[string(h.Key)] = string(h.Value)
+		}
+		ctx := otel.GetTextMapPropagator().Extract(session.Context(), carrier)
 
 		var trigger model.WorkflowTriggerEvent
 
@@ -69,7 +77,7 @@ func (c *TriggerConsumer) ConsumeClaim(
 			continue
 		}
 
-		if err := c.engine.HandleTrigger(trigger); err != nil {
+		if err := c.engine.HandleTrigger(ctx, trigger); err != nil {
 			logger.Log.Error("failed to handle trigger", zap.Error(err))
 			continue
 		}

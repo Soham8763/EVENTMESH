@@ -9,13 +9,25 @@ import (
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/producer"
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	metrics.Init()
+
+	// Expose Prometheus metrics on port 2112
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":2112", nil); err != nil {
+			logger.Log.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 	authClient := auth.NewClient("http://localhost:8081")
 
 	idempotencyStore := idempotency.NewStore(

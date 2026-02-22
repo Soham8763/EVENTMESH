@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/workflow-orchestrator/internal/model"
 	"eventmesh/workflow-orchestrator/internal/producer"
 
@@ -96,6 +97,8 @@ func (e *ExecutionEngine) HandleTrigger(
 		zap.String("execution_id", execID),
 		zap.String("workflow", trigger.WorkflowName))
 
+	metrics.WorkflowsStarted.Inc()
+
 	return e.AdvanceExecution(execID)
 }
 
@@ -154,6 +157,8 @@ func (e *ExecutionEngine) HandleResult(r model.TaskResult) error {
 			if err != nil {
 				return err
 			}
+
+			metrics.WorkflowsFailed.Inc()
 
 			return tx.Commit()
 		}

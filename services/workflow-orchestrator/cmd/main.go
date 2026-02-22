@@ -9,6 +9,7 @@ import (
 	"eventmesh/pkg/tracing"
 	"eventmesh/workflow-orchestrator/internal/consumer"
 	"eventmesh/workflow-orchestrator/internal/engine"
+	"eventmesh/workflow-orchestrator/internal/monitor"
 	"eventmesh/workflow-orchestrator/internal/producer"
 	"eventmesh/workflow-orchestrator/internal/repository"
 
@@ -53,7 +54,17 @@ func main() {
 		logger.Log.Fatal("failed to create task producer", zap.Error(err))
 	}
 
-	execEngine := engine.NewExecutionEngine(db, taskProducer)
+	failureProducer, err := producer.NewFailureProducer(
+		[]string{"localhost:19092"},
+	)
+	if err != nil {
+		logger.Log.Fatal("failed to create failure producer", zap.Error(err))
+	}
+
+	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer)
+
+	// Start stuck workflow checker
+	stuckChecker := monitor.NewStuckChecker(db)
 
 	triggerConsumer, err := consumer.NewTriggerConsumer(
 		[]string{"localhost:19092"},
@@ -80,6 +91,7 @@ func main() {
 
 	go triggerConsumer.Start(ctx)
 	go resultConsumer.Start(ctx)
+	go stuckChecker.Start(ctx)
 
 	logger.Log.Info("orchestrator ready and consuming")
 	select {}

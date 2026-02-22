@@ -17,12 +17,13 @@ import (
 )
 
 type ExecutionEngine struct {
-	db       *sql.DB
-	producer *producer.Producer
+	db              *sql.DB
+	producer        *producer.Producer
+	failureProducer *producer.FailureProducer
 }
 
-func NewExecutionEngine(db *sql.DB, p *producer.Producer) *ExecutionEngine {
-	return &ExecutionEngine{db: db, producer: p}
+func NewExecutionEngine(db *sql.DB, p *producer.Producer, fp *producer.FailureProducer) *ExecutionEngine {
+	return &ExecutionEngine{db: db, producer: p, failureProducer: fp}
 }
 
 func (e *ExecutionEngine) HandleTrigger(
@@ -185,6 +186,14 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 
 			metrics.WorkflowsFailed.Inc()
 
+			e.failureProducer.EmitFailure(ctx, producer.FailureEvent{
+				Type:          "WORKFLOW_FAILED",
+				WorkflowID:    r.WorkflowExecutionID,
+				StepName:      r.StepName,
+				CorrelationID: r.CorrelationID,
+				Reason:        "retry_limit_exceeded",
+			})
+
 			return tx.Commit()
 		}
 
@@ -204,6 +213,12 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		if err != nil {
 			return err
 		}
+
+		metrics.RetryCount.Inc()
+		logger.Log.Warn("step retried",
+			zap.String("step", r.StepName),
+			zap.String("execution_id", r.WorkflowExecutionID),
+			zap.String("correlation_id", r.CorrelationID))
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -13,6 +13,7 @@ import (
 	"eventmesh/event-ingestor/internal/model"
 	"eventmesh/event-ingestor/internal/producer"
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 )
 
 type Handler struct {
@@ -40,6 +41,7 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// 1. Extract API Key
 	apiKey := r.Header.Get("X-API-Key")
 	if apiKey == "" {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "missing api key", http.StatusUnauthorized)
 		return
 	}
@@ -47,9 +49,12 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// 2. Validate API Key
 	tenantID, err := h.authClient.ValidateAPIKey(apiKey)
 	if err != nil {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "invalid api key", http.StatusUnauthorized)
 		return
 	}
+
+	metrics.EventsReceived.Inc()
 
 	// 3. Decode + validate body
 	var req model.IngestEventRequest

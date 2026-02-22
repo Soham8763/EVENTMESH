@@ -2,23 +2,36 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/worker/internal/consumer"
 	"eventmesh/worker/internal/executor"
 	"eventmesh/worker/internal/idempotency"
 	"eventmesh/worker/internal/producer"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	metrics.Init()
+
+	// Expose Prometheus metrics on port 2114
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":2114", nil); err != nil {
+			logger.Log.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 
 	logger.Log.Info("worker starting...")
 

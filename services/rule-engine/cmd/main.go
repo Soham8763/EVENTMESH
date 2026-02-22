@@ -2,21 +2,34 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/rule-engine/internal/consumer"
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/producer"
 	"eventmesh/rule-engine/internal/repository"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	metrics.Init()
+
+	// Expose Prometheus metrics on port 2115
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":2115", nil); err != nil {
+			logger.Log.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 
 	logger.Log.Info("rule-engine starting...")
 

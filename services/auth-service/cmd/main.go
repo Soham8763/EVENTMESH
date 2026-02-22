@@ -7,13 +7,25 @@ import (
 	handler "eventmesh/auth-service/internal/http"
 	"eventmesh/auth-service/internal/repository"
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	metrics.Init()
+
+	// Expose Prometheus metrics on port 2116
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":2116", nil); err != nil {
+			logger.Log.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 
 	dbConn := db.NewPostgres()
 	repo := repository.NewAPIKeyRepository(dbConn)

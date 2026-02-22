@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/google/uuid"
@@ -65,6 +66,8 @@ func (e *ExecutionEngine) AdvanceExecution(execID string) error {
 		if err != nil {
 			return err
 		}
+
+		metrics.WorkflowsCompleted.Inc()
 
 		return tx.Commit()
 	}

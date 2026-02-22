@@ -2,19 +2,32 @@ package main
 
 import (
 	"context"
+	"net/http"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/workflow-orchestrator/internal/consumer"
 	"eventmesh/workflow-orchestrator/internal/engine"
 	"eventmesh/workflow-orchestrator/internal/producer"
 	"eventmesh/workflow-orchestrator/internal/repository"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	metrics.Init()
+
+	// Expose Prometheus metrics on port 2113
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":2113", nil); err != nil {
+			logger.Log.Error("metrics server failed", zap.Error(err))
+		}
+	}()
 
 	logger.Log.Info("workflow-orchestrator starting...")
 

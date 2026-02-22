@@ -3,8 +3,10 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"eventmesh/pkg/logger"
+	"eventmesh/pkg/metrics"
 	"eventmesh/worker/internal/executor"
 	"eventmesh/worker/internal/idempotency"
 	"eventmesh/worker/internal/model"
@@ -110,7 +112,12 @@ func (c *TaskConsumer) ConsumeClaim(
 		}
 
 		// execute task
+		start := time.Now()
 		err = exec.Execute(task)
+		duration := time.Since(start).Seconds()
+
+		metrics.TasksProcessed.Inc()
+		metrics.TaskDuration.Observe(duration)
 
 		// prepare result
 		result := model.TaskResult{
@@ -120,6 +127,7 @@ func (c *TaskConsumer) ConsumeClaim(
 		}
 
 		if err != nil {
+			metrics.TaskFailures.Inc()
 			logger.Log.Error("execution failed",
 				zap.String("step", task.StepName),
 				zap.String("task_id", task.TaskID),

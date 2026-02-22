@@ -6,6 +6,7 @@ import (
 
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
+	"eventmesh/pkg/tracing"
 	"eventmesh/workflow-orchestrator/internal/consumer"
 	"eventmesh/workflow-orchestrator/internal/engine"
 	"eventmesh/workflow-orchestrator/internal/producer"
@@ -18,6 +19,9 @@ import (
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	shutdown := tracing.Init("workflow-orchestrator")
+	defer shutdown()
 
 	metrics.Init()
 
@@ -71,7 +75,9 @@ func main() {
 		logger.Log.Fatal("failed to create result consumer", zap.Error(err))
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go triggerConsumer.Start(ctx)
 	go resultConsumer.Start(ctx)
 

@@ -1,9 +1,12 @@
 package producer
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/IBM/sarama"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 type Producer struct {
@@ -24,7 +27,7 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 	return &Producer{p, topic}, nil
 }
 
-func (p *Producer) Publish(key string, v interface{}) error {
+func (p *Producer) Publish(ctx context.Context, key string, v interface{}) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -34,6 +37,16 @@ func (p *Producer) Publish(key string, v interface{}) error {
 		Topic: p.topic,
 		Key:   sarama.StringEncoder(key),
 		Value: sarama.ByteEncoder(b),
+	}
+
+	// Inject tracing context
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	for k, v := range carrier {
+		msg.Headers = append(msg.Headers, sarama.RecordHeader{
+			Key:   []byte(k),
+			Value: []byte(v),
+		})
 	}
 
 	_, _, err = p.producer.SendMessage(msg)

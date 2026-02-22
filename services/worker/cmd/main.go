@@ -10,6 +10,7 @@ import (
 
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
+	"eventmesh/pkg/tracing"
 	"eventmesh/worker/internal/consumer"
 	"eventmesh/worker/internal/executor"
 	"eventmesh/worker/internal/idempotency"
@@ -22,6 +23,9 @@ import (
 func main() {
 	logger.Init()
 	defer logger.Log.Sync()
+
+	shutdown := tracing.Init("worker")
+	defer shutdown()
 
 	metrics.Init()
 

@@ -13,6 +13,9 @@ import (
 	"eventmesh/worker/internal/producer"
 
 	"github.com/IBM/sarama"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
 
@@ -71,12 +74,29 @@ func (c *TaskConsumer) ConsumeClaim(
 ) error {
 
 	for msg := range claim.Messages() {
+		// Extract tracing context from headers
+		carrier := propagation.MapCarrier{}
+		for _, h := range msg.Headers {
+			carrier[string(h.Key)] = string(h.Value)
+		}
+		ctx := otel.GetTextMapPropagator().Extract(session.Context(), carrier)
+
+		tr := otel.Tracer("worker")
+		ctx, span := tr.Start(ctx, "ConsumeTask")
+
 		var task model.WorkflowTask
 		if err := json.Unmarshal(msg.Value, &task); err != nil {
 			logger.Log.Error("invalid task message", zap.Error(err))
+			span.End()
 			session.MarkMessage(msg, "")
 			continue
 		}
+
+		span.SetAttributes(
+			attribute.String("task_id", task.TaskID),
+			attribute.String("workflow_id", task.WorkflowExecutionID),
+			attribute.String("step", task.StepName),
+		)
 
 		// acquire idempotency lock
 		lockKey := "task_lock:" + task.TaskID
@@ -113,7 +133,7 @@ func (c *TaskConsumer) ConsumeClaim(
 
 		// execute task
 		start := time.Now()
-		err = exec.Execute(task)
+		err = exec.Execute(ctx, task)
 		duration := time.Since(start).Seconds()
 
 		metrics.TasksProcessed.Inc()
@@ -144,13 +164,14 @@ func (c *TaskConsumer) ConsumeClaim(
 			zap.String("status", result.Status),
 			zap.String("step", result.StepName),
 			zap.String("execution_id", task.WorkflowExecutionID))
-		if err := c.producer.Publish(task.WorkflowExecutionID, result); err != nil {
+		if err := c.producer.Publish(ctx, task.WorkflowExecutionID, result); err != nil {
 			logger.Log.Error("failed to publish result", zap.Error(err))
 		}
 
 		// release lease
 		_ = c.store.ReleaseLease(session.Context(), leaseKey)
 
+		span.End()
 		session.MarkMessage(msg, "")
 	}
 

@@ -62,6 +62,28 @@ var (
 			Help: "Total events rejected",
 		},
 	)
+
+	// Failure Visibility Metrics
+	RetryCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "workflow_retries_total",
+			Help: "Total retries executed",
+		},
+	)
+
+	StuckWorkflows = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "stuck_workflows",
+			Help: "Number of workflows stuck in RUNNING state",
+		},
+	)
+
+	WorkerHeartbeat = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "worker_heartbeat_timestamp",
+			Help: "Last worker heartbeat Unix timestamp",
+		},
+	)
 )
 
 func Init() {
@@ -74,5 +96,8 @@ func Init() {
 		WorkflowsFailed,
 		EventsReceived,
 		EventsRejected,
+		RetryCount,
+		StuckWorkflows,
+		WorkerHeartbeat,
 	)
 }

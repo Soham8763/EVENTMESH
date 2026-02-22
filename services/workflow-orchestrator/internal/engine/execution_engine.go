@@ -17,12 +17,13 @@ import (
 )
 
 type ExecutionEngine struct {
-	db       *sql.DB
-	producer *producer.Producer
+	db              *sql.DB
+	producer        *producer.Producer
+	failureProducer *producer.FailureProducer
 }
 
-func NewExecutionEngine(db *sql.DB, p *producer.Producer) *ExecutionEngine {
-	return &ExecutionEngine{db: db, producer: p}
+func NewExecutionEngine(db *sql.DB, p *producer.Producer, fp *producer.FailureProducer) *ExecutionEngine {
+	return &ExecutionEngine{db: db, producer: p, failureProducer: fp}
 }
 
 func (e *ExecutionEngine) HandleTrigger(
@@ -36,6 +37,7 @@ func (e *ExecutionEngine) HandleTrigger(
 	span.SetAttributes(
 		attribute.String("workflow", trigger.WorkflowName),
 		attribute.String("trigger_id", trigger.TriggerID),
+		attribute.String("correlation_id", trigger.CorrelationID),
 	)
 
 	tx, err := e.db.Begin()
@@ -111,7 +113,7 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	metrics.WorkflowsStarted.Inc()
 
-	return e.AdvanceExecution(ctx, execID)
+	return e.AdvanceExecution(ctx, execID, trigger.CorrelationID)
 }
 
 func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) error {
@@ -123,12 +125,14 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		attribute.String("execution_id", r.WorkflowExecutionID),
 		attribute.String("step", r.StepName),
 		attribute.String("status", r.Status),
+		attribute.String("correlation_id", r.CorrelationID),
 	)
 
 	logger.Log.Info("handling task result",
 		zap.String("step", r.StepName),
 		zap.String("execution_id", r.WorkflowExecutionID),
-		zap.String("status", r.Status))
+		zap.String("status", r.Status),
+		zap.String("correlation_id", r.CorrelationID))
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -182,6 +186,14 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 
 			metrics.WorkflowsFailed.Inc()
 
+			e.failureProducer.EmitFailure(ctx, producer.FailureEvent{
+				Type:          "WORKFLOW_FAILED",
+				WorkflowID:    r.WorkflowExecutionID,
+				StepName:      r.StepName,
+				CorrelationID: r.CorrelationID,
+				Reason:        "retry_limit_exceeded",
+			})
+
 			return tx.Commit()
 		}
 
@@ -201,6 +213,12 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		if err != nil {
 			return err
 		}
+
+		metrics.RetryCount.Inc()
+		logger.Log.Warn("step retried",
+			zap.String("step", r.StepName),
+			zap.String("execution_id", r.WorkflowExecutionID),
+			zap.String("correlation_id", r.CorrelationID))
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -208,7 +226,7 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 	}
 
 	if r.Status == model.StepSuccess {
-		return e.AdvanceExecution(ctx, r.WorkflowExecutionID)
+		return e.AdvanceExecution(ctx, r.WorkflowExecutionID, r.CorrelationID)
 	}
 
 	return nil

@@ -13,6 +13,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.uber.org/zap"
 )
@@ -78,34 +79,45 @@ func (c *EventConsumer) ConsumeClaim(
 
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			logger.Log.Error("failed to decode event", zap.Error(err))
+			span.End()
 			session.MarkMessage(msg, "")
 			continue
 		}
 
+		span.SetAttributes(
+			attribute.String("correlation_id", event.CorrelationID),
+			attribute.String("event_type", event.EventType),
+		)
+
 		logger.Log.Info("received event",
 			zap.String("event_id", event.EventID),
 			zap.String("event_type", event.EventType),
-			zap.String("tenant_id", event.TenantID))
+			zap.String("tenant_id", event.TenantID),
+			zap.String("correlation_id", event.CorrelationID))
 
 		matches := c.matcher.Match(event)
 
 		for _, match := range matches {
 			trigger := model.WorkflowTriggerEvent{
-				TriggerID:    uuid.New().String(),
-				EventID:      match.EventID,
-				TenantID:     match.TenantID,
-				WorkflowName: match.WorkflowName,
-				TriggeredAt:  time.Now().UTC(),
+				TriggerID:     uuid.New().String(),
+				EventID:       match.EventID,
+				TenantID:      match.TenantID,
+				WorkflowName:  match.WorkflowName,
+				CorrelationID: match.CorrelationID,
+				TriggeredAt:   time.Now().UTC(),
 			}
 
 			if err := c.producer.Publish(ctx, trigger.TenantID, trigger); err != nil {
-				logger.Log.Error("failed to emit trigger", zap.Error(err))
+				logger.Log.Error("failed to emit trigger",
+					zap.String("correlation_id", trigger.CorrelationID),
+					zap.Error(err))
 				continue
 			}
 
 			logger.Log.Info("emitted workflow trigger",
 				zap.String("workflow", trigger.WorkflowName),
-				zap.String("event_id", trigger.EventID))
+				zap.String("event_id", trigger.EventID),
+				zap.String("correlation_id", trigger.CorrelationID))
 		}
 
 		span.End()

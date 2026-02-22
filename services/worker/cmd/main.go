@@ -39,6 +39,16 @@ func main() {
 
 	logger.Log.Info("worker starting...")
 
+	// Worker heartbeat signal
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			metrics.WorkerHeartbeat.Set(float64(time.Now().Unix()))
+			<-ticker.C
+		}
+	}()
+
 	brokers := []string{"localhost:19092"}
 
 	// Initialize idempotency store

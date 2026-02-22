@@ -6,6 +6,7 @@ type EventEnvelope struct {
 	EventID        string                 `json:"event_id"`
 	EventType      string                 `json:"event_type"`
 	TenantID       string                 `json:"tenant_id"`
+	CorrelationID  string                 `json:"correlation_id"`
 	OccurredAt     time.Time              `json:"occurred_at"`
 	ReceivedAt     time.Time              `json:"received_at"`
 	RequestID      string                 `json:"request_id"`

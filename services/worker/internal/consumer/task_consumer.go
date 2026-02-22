@@ -6,7 +6,9 @@ import (
 	"log"
 
 	"eventmesh/worker/internal/executor"
+	"eventmesh/worker/internal/idempotency"
 	"eventmesh/worker/internal/model"
+	"eventmesh/worker/internal/producer"
 
 	"github.com/IBM/sarama"
 )
@@ -15,12 +17,16 @@ type TaskConsumer struct {
 	group    sarama.ConsumerGroup
 	topic    string
 	registry *executor.Registry
+	producer *producer.Producer
+	store    *idempotency.Store
 }
 
 func NewTaskConsumer(
 	brokers []string,
 	groupID, topic string,
 	registry *executor.Registry,
+	producer *producer.Producer,
+	store *idempotency.Store,
 ) (*TaskConsumer, error) {
 
 	cfg := sarama.NewConfig()
@@ -36,6 +42,8 @@ func NewTaskConsumer(
 		group:    group,
 		topic:    topic,
 		registry: registry,
+		producer: producer,
+		store:    store,
 	}, nil
 }
 
@@ -67,16 +75,66 @@ func (c *TaskConsumer) ConsumeClaim(
 			continue
 		}
 
-		exec, err := c.registry.Get(task.StepName)
+		// acquire idempotency lock
+		lockKey := "task_lock:" + task.TaskID
+		ok, err := c.store.Acquire(session.Context(), lockKey)
 		if err != nil {
-			log.Printf("error: %v", err)
+			log.Printf("idempotency error for task %s: %v", task.TaskID, err)
+			continue
+		}
+		if !ok {
+			log.Printf("duplicate task ignored: %s", task.TaskID)
 			session.MarkMessage(msg, "")
 			continue
 		}
 
-		if err := exec.Execute(task); err != nil {
-			log.Printf("execution failed for step %s: %v", task.StepName, err)
+		// acquire lease
+		leaseKey := "lease:" + task.TaskID
+		ok, err = c.store.AcquireLease(session.Context(), leaseKey)
+		if err != nil {
+			log.Printf("lease error: %v", err)
+			continue
 		}
+		if !ok {
+			log.Printf("task already leased: %s", task.TaskID)
+			continue
+		}
+
+		exec, err := c.registry.Get(task.StepName)
+		if err != nil {
+			log.Printf("error: %v", err)
+			_ = c.store.ReleaseLease(session.Context(), leaseKey)
+			session.MarkMessage(msg, "")
+			continue
+		}
+
+		// execute task
+		err = exec.Execute(task)
+
+		// prepare result
+		result := model.TaskResult{
+			TaskID:              task.TaskID,
+			WorkflowExecutionID: task.WorkflowExecutionID,
+			StepName:            task.StepName,
+		}
+
+		if err != nil {
+			log.Printf("execution failed for step %s: %v", task.StepName, err)
+			errMsg := err.Error()
+			result.Status = "FAILED"
+			result.Error = &errMsg
+		} else {
+			result.Status = "SUCCESS"
+		}
+
+		// publish result
+		log.Printf("publishing result %s for step %s", result.Status, result.StepName)
+		if err := c.producer.Publish(task.WorkflowExecutionID, result); err != nil {
+			log.Printf("failed to publish result: %v", err)
+		}
+
+		// release lease
+		_ = c.store.ReleaseLease(session.Context(), leaseKey)
 
 		session.MarkMessage(msg, "")
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"time"
 
@@ -9,9 +8,14 @@ import (
 	"eventmesh/event-ingestor/internal/auth"
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/producer"
+	"eventmesh/pkg/logger"
+
+	"go.uber.org/zap"
 )
 
 func main() {
+	logger.Init()
+	defer logger.Log.Sync()
 	authClient := auth.NewClient("http://localhost:8081")
 
 	idempotencyStore := idempotency.NewStore(
@@ -24,7 +28,7 @@ func main() {
 		"events",
 	)
 	if err != nil {
-		log.Fatalf("failed to create producer: %v", err)
+		logger.Log.Fatal("failed to create producer", zap.Error(err))
 	}
 
 	handler := api.NewHandler(
@@ -35,6 +39,6 @@ func main() {
 
 	http.HandleFunc("/events", handler.IngestEvent)
 
-	log.Println("event-ingestor running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	logger.Log.Info("event-ingestor running on :8080")
+	logger.Log.Fatal("service failure", zap.Error(http.ListenAndServe(":8080", nil)))
 }

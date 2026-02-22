@@ -2,16 +2,17 @@ package engine
 
 import (
 	"database/sql"
-	"log"
 	"time"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 func (e *ExecutionEngine) AdvanceExecution(execID string) error {
-	log.Printf("engine: advancing execution id=%s", execID)
+	logger.Log.Info("advancing execution", zap.String("execution_id", execID))
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -107,7 +108,9 @@ func (e *ExecutionEngine) AdvanceExecution(execID string) error {
 		return err
 	}
 
-	log.Printf("engine: emitted task for step=%s execution=%s", stepName, execID)
+	logger.Log.Info("emitted task",
+		zap.String("step", stepName),
+		zap.String("execution_id", execID))
 
 	return tx.Commit()
 }

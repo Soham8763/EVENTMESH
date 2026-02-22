@@ -6,4 +6,5 @@ use (
 	./services/rule-engine
 	./services/workflow-orchestrator
 	./services/worker
+	./pkg
 )

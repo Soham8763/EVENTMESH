@@ -3,11 +3,12 @@ package consumer
 import (
 	"context"
 	"encoding/json"
-	"log"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/IBM/sarama"
+	"go.uber.org/zap"
 )
 
 type Engine interface {
@@ -45,7 +46,7 @@ func NewTriggerConsumer(
 func (c *TriggerConsumer) Start(ctx context.Context) {
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
-			log.Printf("consumer error: %v", err)
+			logger.Log.Error("trigger consumer error", zap.Error(err))
 		}
 	}
 }
@@ -63,13 +64,13 @@ func (c *TriggerConsumer) ConsumeClaim(
 		var trigger model.WorkflowTriggerEvent
 
 		if err := json.Unmarshal(msg.Value, &trigger); err != nil {
-			log.Printf("invalid trigger message: %v", err)
+			logger.Log.Error("invalid trigger message", zap.Error(err))
 			session.MarkMessage(msg, "")
 			continue
 		}
 
 		if err := c.engine.HandleTrigger(trigger); err != nil {
-			log.Printf("failed to create execution: %v", err)
+			logger.Log.Error("failed to handle trigger", zap.Error(err))
 			continue
 		}
 

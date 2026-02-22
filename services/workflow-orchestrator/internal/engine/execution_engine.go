@@ -3,12 +3,13 @@ package engine
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
 
-	"github.com/google/uuid"
-
+	"eventmesh/pkg/logger"
 	"eventmesh/workflow-orchestrator/internal/model"
 	"eventmesh/workflow-orchestrator/internal/producer"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type ExecutionEngine struct {
@@ -91,14 +92,18 @@ func (e *ExecutionEngine) HandleTrigger(
 		return err
 	}
 
-	log.Printf("engine: created execution id=%s for workflow=%s", execID, trigger.WorkflowName)
+	logger.Log.Info("workflow execution created",
+		zap.String("execution_id", execID),
+		zap.String("workflow", trigger.WorkflowName))
 
 	return e.AdvanceExecution(execID)
 }
 
 func (e *ExecutionEngine) HandleResult(r model.TaskResult) error {
-	log.Printf("engine: handling result for step=%s execution=%s status=%s",
-		r.StepName, r.WorkflowExecutionID, r.Status)
+	logger.Log.Info("handling task result",
+		zap.String("step", r.StepName),
+		zap.String("execution_id", r.WorkflowExecutionID),
+		zap.String("status", r.Status))
 
 	tx, err := e.db.Begin()
 	if err != nil {

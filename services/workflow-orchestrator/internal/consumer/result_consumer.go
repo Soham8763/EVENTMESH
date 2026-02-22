@@ -3,11 +3,12 @@ package consumer
 import (
 	"context"
 	"encoding/json"
-	"log"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/workflow-orchestrator/internal/model"
 
 	"github.com/IBM/sarama"
+	"go.uber.org/zap"
 )
 
 type ResultHandler interface {
@@ -43,10 +44,10 @@ func NewResultConsumer(
 }
 
 func (c *ResultConsumer) Start(ctx context.Context) {
-	log.Printf("result-consumer: starting for topic=%s", c.topic)
+	logger.Log.Info("result-consumer starting", zap.String("topic", c.topic))
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
-			log.Printf("result-consumer error: %v", err)
+			logger.Log.Error("result-consumer error", zap.Error(err))
 		}
 		if ctx.Err() != nil {
 			return
@@ -67,13 +68,13 @@ func (c *ResultConsumer) ConsumeClaim(
 		var result model.TaskResult
 
 		if err := json.Unmarshal(msg.Value, &result); err != nil {
-			log.Printf("invalid result message: %v", err)
+			logger.Log.Error("invalid result message", zap.Error(err))
 			session.MarkMessage(msg, "")
 			continue
 		}
 
 		if err := c.engine.HandleResult(result); err != nil {
-			log.Printf("result handling failed: %v", err)
+			logger.Log.Error("result handling failed", zap.Error(err))
 			continue
 		}
 

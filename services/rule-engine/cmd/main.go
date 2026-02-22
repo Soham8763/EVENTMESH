@@ -2,27 +2,32 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/rule-engine/internal/consumer"
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/producer"
 	"eventmesh/rule-engine/internal/repository"
+
+	"go.uber.org/zap"
 )
 
 func main() {
-	log.Println("rule-engine starting...")
+	logger.Init()
+	defer logger.Log.Sync()
+
+	logger.Log.Info("rule-engine starting...")
 
 	db := repository.NewPostgres()
 	ruleRepo := repository.NewRuleRepository(db)
 
 	rules, err := ruleRepo.LoadActiveRules()
 	if err != nil {
-		log.Fatalf("failed to load rules: %v", err)
+		logger.Log.Fatal("failed to load rules", zap.Error(err))
 	}
-	log.Printf("loaded %d active rules\n", len(rules))
+	logger.Log.Info("loaded active rules", zap.Int("count", len(rules)))
 
 	m := matcher.NewMatcher(rules)
 
@@ -31,7 +36,7 @@ func main() {
 		"workflow_triggers",
 	)
 	if err != nil {
-		log.Fatalf("failed to create producer: %v", err)
+		logger.Log.Fatal("failed to create producer", zap.Error(err))
 	}
 
 	eventConsumer, err := consumer.NewEventConsumer(
@@ -42,7 +47,7 @@ func main() {
 		p,
 	)
 	if err != nil {
-		log.Fatalf("failed to create consumer: %v", err)
+		logger.Log.Fatal("failed to create consumer", zap.Error(err))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -50,12 +55,12 @@ func main() {
 
 	go eventConsumer.Start(ctx)
 
-	log.Println("rule-engine consuming from 'events' topic")
+	logger.Log.Info("rule-engine consuming from 'events' topic")
 
 	// Graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 
-	log.Println("rule-engine shutting down")
+	logger.Log.Info("rule-engine shutting down")
 }

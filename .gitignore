@@ -32,3 +32,4 @@ go.work.sum
 # .vscode/
 /logs
 run-services.sh
+/assets

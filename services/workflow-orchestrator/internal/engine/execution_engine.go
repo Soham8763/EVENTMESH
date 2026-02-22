@@ -95,3 +95,89 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	return e.AdvanceExecution(execID)
 }
+
+func (e *ExecutionEngine) HandleResult(r model.TaskResult) error {
+	log.Printf("engine: handling result for step=%s execution=%s status=%s",
+		r.StepName, r.WorkflowExecutionID, r.Status)
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// update step status
+	_, err = tx.Exec(`
+		UPDATE workflow_step_executions
+		SET status=$1, last_error=$2
+		WHERE workflow_execution_id=$3
+		  AND step_name=$4
+	`,
+		r.Status,
+		r.Error,
+		r.WorkflowExecutionID,
+		r.StepName,
+	)
+	if err != nil {
+		return err
+	}
+
+	if r.Status == model.StepFailed {
+
+		var retryCount int
+
+		err = tx.QueryRow(`
+			SELECT retry_count
+			FROM workflow_step_executions
+			WHERE workflow_execution_id=$1
+			  AND step_name=$2
+		`, r.WorkflowExecutionID, r.StepName).Scan(&retryCount)
+
+		if err != nil {
+			return err
+		}
+
+		if retryCount >= 3 {
+
+			// fail workflow
+			_, err = tx.Exec(`
+				UPDATE workflow_executions
+				SET status=$1
+				WHERE id=$2
+			`, model.WorkflowFailed, r.WorkflowExecutionID)
+
+			if err != nil {
+				return err
+			}
+
+			return tx.Commit()
+		}
+
+		// increment retry
+		_, err = tx.Exec(`
+			UPDATE workflow_step_executions
+			SET retry_count = retry_count + 1,
+			    status=$1
+			WHERE workflow_execution_id=$2
+			  AND step_name=$3
+		`,
+			model.StepPending,
+			r.WorkflowExecutionID,
+			r.StepName,
+		)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if r.Status == model.StepSuccess {
+		return e.AdvanceExecution(r.WorkflowExecutionID)
+	}
+
+	return nil
+}

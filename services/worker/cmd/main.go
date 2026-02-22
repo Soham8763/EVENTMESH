@@ -6,15 +6,27 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"eventmesh/worker/internal/consumer"
 	"eventmesh/worker/internal/executor"
+	"eventmesh/worker/internal/idempotency"
+	"eventmesh/worker/internal/producer"
 )
 
 func main() {
 	log.Println("worker starting...")
 
 	brokers := []string{"localhost:19092"}
+
+	// Initialize idempotency store
+	store := idempotency.NewStore("localhost:6379", 10*time.Minute)
+
+	// Initialize producer
+	resProducer, err := producer.NewProducer(brokers, "workflow_task_results")
+	if err != nil {
+		log.Fatalf("failed to create result producer: %v", err)
+	}
 
 	// Initialize executors
 	registry := executor.NewRegistry()
@@ -24,9 +36,11 @@ func main() {
 	// Initialize task consumer
 	taskConsumer, err := consumer.NewTaskConsumer(
 		brokers,
-		"worker-group-2",
+		"worker-group-4", // New group ID for fresh rebalance
 		"workflow_tasks",
 		registry,
+		resProducer,
+		store,
 	)
 	if err != nil {
 		log.Fatalf("failed to create task consumer: %v", err)

@@ -2,19 +2,36 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/worker/internal/consumer"
 	"eventmesh/worker/internal/executor"
+	"eventmesh/worker/internal/idempotency"
+	"eventmesh/worker/internal/producer"
+
+	"go.uber.org/zap"
 )
 
 func main() {
-	log.Println("worker starting...")
+	logger.Init()
+	defer logger.Log.Sync()
+
+	logger.Log.Info("worker starting...")
 
 	brokers := []string{"localhost:19092"}
+
+	// Initialize idempotency store
+	store := idempotency.NewStore("localhost:6379", 10*time.Minute)
+
+	// Initialize producer
+	resProducer, err := producer.NewProducer(brokers, "workflow_task_results")
+	if err != nil {
+		logger.Log.Fatal("failed to create result producer", zap.Error(err))
+	}
 
 	// Initialize executors
 	registry := executor.NewRegistry()
@@ -24,12 +41,14 @@ func main() {
 	// Initialize task consumer
 	taskConsumer, err := consumer.NewTaskConsumer(
 		brokers,
-		"worker-group-2",
+		"worker-group-4", // New group ID for fresh rebalance
 		"workflow_tasks",
 		registry,
+		resProducer,
+		store,
 	)
 	if err != nil {
-		log.Fatalf("failed to create task consumer: %v", err)
+		logger.Log.Fatal("failed to create task consumer", zap.Error(err))
 	}
 
 	// Start consumer
@@ -42,5 +61,5 @@ func main() {
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 	<-sigterm
 
-	log.Println("worker shutting down...")
+	logger.Log.Info("worker shutting down...")
 }

@@ -3,24 +3,31 @@ package consumer
 import (
 	"context"
 	"encoding/json"
-	"log"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/worker/internal/executor"
+	"eventmesh/worker/internal/idempotency"
 	"eventmesh/worker/internal/model"
+	"eventmesh/worker/internal/producer"
 
 	"github.com/IBM/sarama"
+	"go.uber.org/zap"
 )
 
 type TaskConsumer struct {
 	group    sarama.ConsumerGroup
 	topic    string
 	registry *executor.Registry
+	producer *producer.Producer
+	store    *idempotency.Store
 }
 
 func NewTaskConsumer(
 	brokers []string,
 	groupID, topic string,
 	registry *executor.Registry,
+	producer *producer.Producer,
+	store *idempotency.Store,
 ) (*TaskConsumer, error) {
 
 	cfg := sarama.NewConfig()
@@ -36,14 +43,16 @@ func NewTaskConsumer(
 		group:    group,
 		topic:    topic,
 		registry: registry,
+		producer: producer,
+		store:    store,
 	}, nil
 }
 
 func (c *TaskConsumer) Start(ctx context.Context) {
-	log.Printf("task-consumer: starting for topic=%s", c.topic)
+	logger.Log.Info("task-consumer: starting", zap.String("topic", c.topic))
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
-			log.Printf("task-consumer error: %v", err)
+			logger.Log.Error("task-consumer error", zap.Error(err))
 		}
 		if ctx.Err() != nil {
 			return
@@ -62,21 +71,77 @@ func (c *TaskConsumer) ConsumeClaim(
 	for msg := range claim.Messages() {
 		var task model.WorkflowTask
 		if err := json.Unmarshal(msg.Value, &task); err != nil {
-			log.Printf("invalid task message: %v", err)
+			logger.Log.Error("invalid task message", zap.Error(err))
 			session.MarkMessage(msg, "")
+			continue
+		}
+
+		// acquire idempotency lock
+		lockKey := "task_lock:" + task.TaskID
+		ok, err := c.store.Acquire(session.Context(), lockKey)
+		if err != nil {
+			logger.Log.Error("idempotency error", zap.String("task_id", task.TaskID), zap.Error(err))
+			continue
+		}
+		if !ok {
+			logger.Log.Warn("duplicate task ignored", zap.String("task_id", task.TaskID))
+			session.MarkMessage(msg, "")
+			continue
+		}
+
+		// acquire lease
+		leaseKey := "lease:" + task.TaskID
+		ok, err = c.store.AcquireLease(session.Context(), leaseKey)
+		if err != nil {
+			logger.Log.Error("lease error", zap.String("task_id", task.TaskID), zap.Error(err))
+			continue
+		}
+		if !ok {
+			logger.Log.Info("task already leased", zap.String("task_id", task.TaskID))
 			continue
 		}
 
 		exec, err := c.registry.Get(task.StepName)
 		if err != nil {
-			log.Printf("error: %v", err)
+			logger.Log.Error("executor not found", zap.String("step", task.StepName), zap.Error(err))
+			_ = c.store.ReleaseLease(session.Context(), leaseKey)
 			session.MarkMessage(msg, "")
 			continue
 		}
 
-		if err := exec.Execute(task); err != nil {
-			log.Printf("execution failed for step %s: %v", task.StepName, err)
+		// execute task
+		err = exec.Execute(task)
+
+		// prepare result
+		result := model.TaskResult{
+			TaskID:              task.TaskID,
+			WorkflowExecutionID: task.WorkflowExecutionID,
+			StepName:            task.StepName,
 		}
+
+		if err != nil {
+			logger.Log.Error("execution failed",
+				zap.String("step", task.StepName),
+				zap.String("task_id", task.TaskID),
+				zap.Error(err))
+			errMsg := err.Error()
+			result.Status = "FAILED"
+			result.Error = &errMsg
+		} else {
+			result.Status = "SUCCESS"
+		}
+
+		// publish result
+		logger.Log.Info("publishing result",
+			zap.String("status", result.Status),
+			zap.String("step", result.StepName),
+			zap.String("execution_id", task.WorkflowExecutionID))
+		if err := c.producer.Publish(task.WorkflowExecutionID, result); err != nil {
+			logger.Log.Error("failed to publish result", zap.Error(err))
+		}
+
+		// release lease
+		_ = c.store.ReleaseLease(session.Context(), leaseKey)
 
 		session.MarkMessage(msg, "")
 	}

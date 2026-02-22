@@ -3,15 +3,16 @@ package consumer
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
+	"eventmesh/pkg/logger"
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/model"
 	"eventmesh/rule-engine/internal/producer"
 
 	"github.com/IBM/sarama"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type EventConsumer struct {
@@ -47,7 +48,7 @@ func NewEventConsumer(
 func (c *EventConsumer) Start(ctx context.Context) {
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
-			log.Printf("consumer error: %v", err)
+			logger.Log.Error("event consumer error", zap.Error(err))
 		}
 	}
 }
@@ -64,17 +65,15 @@ func (c *EventConsumer) ConsumeClaim(
 		var event model.EventEnvelope
 
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
-			log.Printf("failed to decode event: %v", err)
+			logger.Log.Error("failed to decode event", zap.Error(err))
 			session.MarkMessage(msg, "")
 			continue
 		}
 
-		log.Printf(
-			"received event: event_id=%s event_type=%s tenant_id=%s",
-			event.EventID,
-			event.EventType,
-			event.TenantID,
-		)
+		logger.Log.Info("received event",
+			zap.String("event_id", event.EventID),
+			zap.String("event_type", event.EventType),
+			zap.String("tenant_id", event.TenantID))
 
 		matches := c.matcher.Match(event)
 
@@ -88,15 +87,13 @@ func (c *EventConsumer) ConsumeClaim(
 			}
 
 			if err := c.producer.Publish(trigger.TenantID, trigger); err != nil {
-				log.Printf("failed to emit trigger: %v", err)
+				logger.Log.Error("failed to emit trigger", zap.Error(err))
 				continue
 			}
 
-			log.Printf(
-				"emitted workflow trigger: workflow=%s event_id=%s",
-				trigger.WorkflowName,
-				trigger.EventID,
-			)
+			logger.Log.Info("emitted workflow trigger",
+				zap.String("workflow", trigger.WorkflowName),
+				zap.String("event_id", trigger.EventID))
 		}
 
 		session.MarkMessage(msg, "")

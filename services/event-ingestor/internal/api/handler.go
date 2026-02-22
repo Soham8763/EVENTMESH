@@ -2,16 +2,17 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"eventmesh/event-ingestor/internal/auth"
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/model"
 	"eventmesh/event-ingestor/internal/producer"
+	"eventmesh/pkg/logger"
 )
 
 type Handler struct {
@@ -103,11 +104,13 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 
 	// 6.5. Publish envelope to Redpanda/Kafka
 	if err := h.producer.Publish(tenantID, envelope); err != nil {
-		log.Printf("failed to publish event: %v", err)
+		logger.Log.Error("failed to publish event", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("event published: %+v\n", envelope)
+	logger.Log.Info("event published",
+		zap.String("event_id", envelope.EventID),
+		zap.String("tenant_id", tenantID))
 
 	// 7. Set Redis key (TTL)
 	if err := h.idempotencyStore.Set(ctx, idempotencyKey); err != nil {

@@ -35,14 +35,21 @@ func NewHandler(authClient *auth.Client, idempotencyStore *idempotency.Store, pr
 }
 
 func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
-	// 0. Generate/Extract Request ID (for tracing, logging, debugging)
+	// 0. Generate/Extract Request ID and Correlation ID
 	requestID := r.Header.Get("X-Request-ID")
 	if requestID == "" {
 		requestID = uuid.New().String()
 	}
+	correlationID := r.Header.Get("X-Correlation-ID")
+	if correlationID == "" {
+		correlationID = uuid.New().String()
+	}
 
 	tr := otel.Tracer("event-ingestor")
-	ctx, span := tr.Start(r.Context(), "IngestEvent", trace.WithAttributes(attribute.String("request_id", requestID)))
+	ctx, span := tr.Start(r.Context(), "IngestEvent", trace.WithAttributes(
+		attribute.String("request_id", requestID),
+		attribute.String("correlation_id", correlationID),
+	))
 	defer span.End()
 
 	// 1. Extract API Key
@@ -108,6 +115,7 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		EventID:        uuid.New().String(),
 		EventType:      req.EventType,
 		TenantID:       tenantID,
+		CorrelationID:  correlationID,
 		OccurredAt:     time.Now(),
 		ReceivedAt:     time.Now(),
 		RequestID:      requestID,
@@ -116,14 +124,15 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6.5. Publish envelope to Redpanda/Kafka
-	if err := h.producer.Publish(ctx, tenantID, req); err != nil {
+	if err := h.producer.Publish(ctx, tenantID, envelope); err != nil {
 		logger.Log.Error("failed to publish event", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	logger.Log.Info("event published",
 		zap.String("event_id", envelope.EventID),
-		zap.String("tenant_id", tenantID))
+		zap.String("tenant_id", tenantID),
+		zap.String("correlation_id", correlationID))
 
 	// 7. Set Redis key (TTL)
 	if err := h.idempotencyStore.Set(ctx, idempotencyKey); err != nil {
@@ -139,5 +148,6 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Request-ID", requestID)
+	w.Header().Set("X-Correlation-ID", correlationID)
 	json.NewEncoder(w).Encode(resp)
 }

@@ -96,6 +96,7 @@ func (c *TaskConsumer) ConsumeClaim(
 			attribute.String("task_id", task.TaskID),
 			attribute.String("workflow_id", task.WorkflowExecutionID),
 			attribute.String("step", task.StepName),
+			attribute.String("correlation_id", task.CorrelationID),
 		)
 
 		// acquire idempotency lock
@@ -144,6 +145,7 @@ func (c *TaskConsumer) ConsumeClaim(
 			TaskID:              task.TaskID,
 			WorkflowExecutionID: task.WorkflowExecutionID,
 			StepName:            task.StepName,
+			CorrelationID:       task.CorrelationID,
 		}
 
 		if err != nil {
@@ -151,6 +153,7 @@ func (c *TaskConsumer) ConsumeClaim(
 			logger.Log.Error("execution failed",
 				zap.String("step", task.StepName),
 				zap.String("task_id", task.TaskID),
+				zap.String("correlation_id", task.CorrelationID),
 				zap.Error(err))
 			errMsg := err.Error()
 			result.Status = "FAILED"
@@ -163,7 +166,8 @@ func (c *TaskConsumer) ConsumeClaim(
 		logger.Log.Info("publishing result",
 			zap.String("status", result.Status),
 			zap.String("step", result.StepName),
-			zap.String("execution_id", task.WorkflowExecutionID))
+			zap.String("execution_id", task.WorkflowExecutionID),
+			zap.String("correlation_id", task.CorrelationID))
 		if err := c.producer.Publish(ctx, task.WorkflowExecutionID, result); err != nil {
 			logger.Log.Error("failed to publish result", zap.Error(err))
 		}

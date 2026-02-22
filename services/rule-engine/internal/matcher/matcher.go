@@ -27,10 +27,11 @@ func (m *Matcher) Match(event model.EventEnvelope) []model.MatchResult {
 		}
 
 		results = append(results, model.MatchResult{
-			RuleID:       rule.ID,
-			TenantID:     rule.TenantID,
-			WorkflowName: rule.WorkflowName,
-			EventID:      event.EventID,
+			RuleID:        rule.ID,
+			TenantID:      rule.TenantID,
+			WorkflowName:  rule.WorkflowName,
+			EventID:       event.EventID,
+			CorrelationID: event.CorrelationID,
 		})
 	}
 

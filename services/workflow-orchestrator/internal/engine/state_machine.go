@@ -15,12 +15,15 @@ import (
 	"go.uber.org/zap"
 )
 
-func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string) error {
+func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, correlationID string) error {
 	tr := otel.Tracer("workflow-orchestrator")
 	ctx, span := tr.Start(ctx, "AdvanceExecution")
 	defer span.End()
 
-	span.SetAttributes(attribute.String("execution_id", execID))
+	span.SetAttributes(
+		attribute.String("execution_id", execID),
+		attribute.String("correlation_id", correlationID),
+	)
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -111,6 +114,7 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string) e
 		WorkflowExecutionID: execID,
 		StepName:            stepName,
 		TenantID:            tenantID,
+		CorrelationID:       correlationID,
 		CreatedAt:           time.Now().UTC(),
 	}
 
@@ -120,7 +124,8 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string) e
 
 	logger.Log.Info("emitted task",
 		zap.String("step", stepName),
-		zap.String("execution_id", execID))
+		zap.String("execution_id", execID),
+		zap.String("correlation_id", correlationID))
 
 	return tx.Commit()
 }

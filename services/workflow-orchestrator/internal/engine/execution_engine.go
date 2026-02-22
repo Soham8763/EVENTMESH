@@ -36,6 +36,7 @@ func (e *ExecutionEngine) HandleTrigger(
 	span.SetAttributes(
 		attribute.String("workflow", trigger.WorkflowName),
 		attribute.String("trigger_id", trigger.TriggerID),
+		attribute.String("correlation_id", trigger.CorrelationID),
 	)
 
 	tx, err := e.db.Begin()
@@ -111,7 +112,7 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	metrics.WorkflowsStarted.Inc()
 
-	return e.AdvanceExecution(ctx, execID)
+	return e.AdvanceExecution(ctx, execID, trigger.CorrelationID)
 }
 
 func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) error {
@@ -123,12 +124,14 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		attribute.String("execution_id", r.WorkflowExecutionID),
 		attribute.String("step", r.StepName),
 		attribute.String("status", r.Status),
+		attribute.String("correlation_id", r.CorrelationID),
 	)
 
 	logger.Log.Info("handling task result",
 		zap.String("step", r.StepName),
 		zap.String("execution_id", r.WorkflowExecutionID),
-		zap.String("status", r.Status))
+		zap.String("status", r.Status),
+		zap.String("correlation_id", r.CorrelationID))
 
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -208,7 +211,7 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 	}
 
 	if r.Status == model.StepSuccess {
-		return e.AdvanceExecution(ctx, r.WorkflowExecutionID)
+		return e.AdvanceExecution(ctx, r.WorkflowExecutionID, r.CorrelationID)
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 
 	"eventmesh/workflow-orchestrator/internal/consumer"
 	"eventmesh/workflow-orchestrator/internal/engine"
+	"eventmesh/workflow-orchestrator/internal/producer"
 	"eventmesh/workflow-orchestrator/internal/repository"
 )
 
@@ -22,7 +23,15 @@ func main() {
 
 	log.Printf("loaded %d workflow definitions\n", len(defs))
 
-	execEngine := engine.NewExecutionEngine(db)
+	taskProducer, err := producer.NewProducer(
+		[]string{"localhost:19092"},
+		"workflow_tasks",
+	)
+	if err != nil {
+		log.Fatalf("failed to create task producer: %v", err)
+	}
+
+	execEngine := engine.NewExecutionEngine(db, taskProducer)
 
 	triggerConsumer, err := consumer.NewTriggerConsumer(
 		[]string{"localhost:19092"},

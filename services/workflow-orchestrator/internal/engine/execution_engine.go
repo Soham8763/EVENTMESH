@@ -3,18 +3,21 @@ package engine
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 
 	"github.com/google/uuid"
 
 	"eventmesh/workflow-orchestrator/internal/model"
+	"eventmesh/workflow-orchestrator/internal/producer"
 )
 
 type ExecutionEngine struct {
-	db *sql.DB
+	db       *sql.DB
+	producer *producer.Producer
 }
 
-func NewExecutionEngine(db *sql.DB) *ExecutionEngine {
-	return &ExecutionEngine{db: db}
+func NewExecutionEngine(db *sql.DB, p *producer.Producer) *ExecutionEngine {
+	return &ExecutionEngine{db: db, producer: p}
 }
 
 func (e *ExecutionEngine) HandleTrigger(
@@ -65,23 +68,30 @@ func (e *ExecutionEngine) HandleTrigger(
 	}
 
 	// Insert step executions
-	for _, s := range steps {
+	for i, s := range steps {
 
 		stepID := uuid.New().String()
 
 		_, err := tx.Exec(`
 			INSERT INTO workflow_step_executions
-			(id, workflow_execution_id, step_name, status)
-			VALUES ($1,$2,$3,'PENDING')
+			(id, workflow_execution_id, step_name, status, step_index)
+			VALUES ($1,$2,$3,'PENDING',$4)
 		`,
 			stepID,
 			execID,
 			s["step"],
+			i,
 		)
 		if err != nil {
 			return err
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	log.Printf("engine: created execution id=%s for workflow=%s", execID, trigger.WorkflowName)
+
+	return e.AdvanceExecution(execID)
 }

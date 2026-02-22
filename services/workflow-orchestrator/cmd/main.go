@@ -43,8 +43,19 @@ func main() {
 		log.Fatal(err)
 	}
 
+	resultConsumer, err := consumer.NewResultConsumer(
+		[]string{"localhost:19092"},
+		"workflow-results-group",
+		"workflow_task_results",
+		execEngine,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	ctx := context.Background()
 	go triggerConsumer.Start(ctx)
+	go resultConsumer.Start(ctx)
 
 	select {}
 }

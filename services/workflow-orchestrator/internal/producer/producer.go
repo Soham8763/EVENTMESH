@@ -27,14 +27,19 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 	return &Producer{p, topic}, nil
 }
 
-func (p *Producer) Publish(ctx context.Context, key string, v interface{}) error {
+func (p *Producer) Publish(ctx context.Context, key string, v interface{}, optionalTopic ...string) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 
+	topic := p.topic
+	if len(optionalTopic) > 0 {
+		topic = optionalTopic[0]
+	}
+
 	msg := &sarama.ProducerMessage{
-		Topic: p.topic,
+		Topic: topic,
 		Key:   sarama.StringEncoder(key),
 		Value: sarama.ByteEncoder(b),
 	}

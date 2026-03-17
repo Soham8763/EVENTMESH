@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/workflow-orchestrator/internal/model"
 	"eventmesh/workflow-orchestrator/internal/producer"
+
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -20,10 +23,11 @@ type ExecutionEngine struct {
 	db              *sql.DB
 	producer        *producer.Producer
 	failureProducer *producer.FailureProducer
+	publisher       *events.EventPublisher
 }
 
-func NewExecutionEngine(db *sql.DB, p *producer.Producer, fp *producer.FailureProducer) *ExecutionEngine {
-	return &ExecutionEngine{db: db, producer: p, failureProducer: fp}
+func NewExecutionEngine(db *sql.DB, p *producer.Producer, fp *producer.FailureProducer, ep *events.EventPublisher) *ExecutionEngine {
+	return &ExecutionEngine{db: db, producer: p, failureProducer: fp, publisher: ep}
 }
 
 func (e *ExecutionEngine) HandleTrigger(
@@ -111,6 +115,17 @@ func (e *ExecutionEngine) HandleTrigger(
 		zap.String("execution_id", execID),
 		zap.String("workflow", trigger.WorkflowName))
 
+	// Emit WorkflowStarted event
+	e.publisher.Publish(ctx, execID, events.WorkflowStartedEvent{
+		BaseEvent: events.BaseEvent{
+			EventID:     uuid.New().String(),
+			EventType:   events.WorkflowStarted,
+			ExecutionID: execID,
+			Timestamp:   time.Now(),
+		},
+		WorkflowID: trigger.WorkflowName,
+	})
+
 	metrics.WorkflowsStarted.Inc()
 
 	return e.AdvanceExecution(ctx, execID, trigger.CorrelationID)
@@ -139,6 +154,36 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		return err
 	}
 	defer tx.Rollback()
+
+	// Emit Step Result event
+	eventType := events.StepCompleted
+	if r.Status == model.StepFailed {
+		eventType = events.StepFailed
+	}
+
+	if eventType == events.StepCompleted {
+		e.publisher.Publish(ctx, r.WorkflowExecutionID, events.StepCompletedEvent{
+			BaseEvent: events.BaseEvent{
+				EventID:     uuid.New().String(),
+				EventType:   events.StepCompleted,
+				ExecutionID: r.WorkflowExecutionID,
+				Timestamp:   time.Now(),
+			},
+			StepName: r.StepName,
+			Result:   r.Status,
+		})
+	} else {
+		e.publisher.Publish(ctx, r.WorkflowExecutionID, events.StepFailedEvent{
+			BaseEvent: events.BaseEvent{
+				EventID:     uuid.New().String(),
+				EventType:   events.StepFailed,
+				ExecutionID: r.WorkflowExecutionID,
+				Timestamp:   time.Now(),
+			},
+			StepName: r.StepName,
+			Error:    safelyGetError(r.Error),
+		})
+	}
 
 	// update step status
 	_, err = tx.Exec(`
@@ -230,4 +275,11 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 	}
 
 	return nil
+}
+
+func safelyGetError(err *string) string {
+	if err == nil {
+		return ""
+	}
+	return *err
 }

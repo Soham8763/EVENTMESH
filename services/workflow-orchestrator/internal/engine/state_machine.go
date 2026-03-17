@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/workflow-orchestrator/internal/model"
@@ -79,6 +80,16 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 
 		metrics.WorkflowsCompleted.Inc()
 
+		// Emit WorkflowCompleted event
+		e.publisher.Publish(ctx, execID, events.WorkflowCompletedEvent{
+			BaseEvent: events.BaseEvent{
+				EventID:     uuid.New().String(),
+				EventType:   events.WorkflowCompleted,
+				ExecutionID: execID,
+				Timestamp:   time.Now(),
+			},
+		})
+
 		return tx.Commit()
 	}
 
@@ -126,6 +137,17 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 		zap.String("step", stepName),
 		zap.String("execution_id", execID),
 		zap.String("correlation_id", correlationID))
+
+	// Emit StepScheduled event
+	e.publisher.Publish(ctx, execID, events.StepScheduledEvent{
+		BaseEvent: events.BaseEvent{
+			EventID:     uuid.New().String(),
+			EventType:   events.StepScheduled,
+			ExecutionID: execID,
+			Timestamp:   time.Now(),
+		},
+		StepName: stepName,
+	})
 
 	return tx.Commit()
 }

@@ -53,7 +53,7 @@ func main() {
 	brokers := []string{"localhost:19092"}
 
 	// Initialize idempotency store
-	store := idempotency.NewStore("localhost:6379", 10*time.Minute)
+	store := idempotency.NewStore("localhost:6380", 10*time.Minute)
 
 	// Initialize producer
 	resProducer, err := producer.NewProducer(brokers, "workflow_task_results")

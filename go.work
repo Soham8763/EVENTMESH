@@ -7,4 +7,5 @@ use (
 	./services/workflow-orchestrator
 	./services/worker
 	./pkg
+	./internal/events
 )

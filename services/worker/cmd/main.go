@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/pkg/tracing"
@@ -65,11 +66,18 @@ func main() {
 	registry.Register("send_email", &executor.SendEmailExecutor{})
 	registry.Register("create_profile", &executor.CreateProfileExecutor{})
 
+	// Define capabilities
+	capabilities := []string{"send_email", "create_profile"}
+	var taskTopics []string
+	for _, cap := range capabilities {
+		taskTopics = append(taskTopics, events.TaskTopic(cap))
+	}
+
 	// Initialize task consumer
 	taskConsumer, err := consumer.NewTaskConsumer(
 		brokers,
 		"worker-group-4", // New group ID for fresh rebalance
-		"workflow_tasks",
+		taskTopics,
 		registry,
 		resProducer,
 		store,

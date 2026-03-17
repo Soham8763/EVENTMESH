@@ -21,7 +21,7 @@ import (
 
 type TaskConsumer struct {
 	group    sarama.ConsumerGroup
-	topic    string
+	topics   []string
 	registry *executor.Registry
 	producer *producer.Producer
 	store    *idempotency.Store
@@ -29,7 +29,8 @@ type TaskConsumer struct {
 
 func NewTaskConsumer(
 	brokers []string,
-	groupID, topic string,
+	groupID string,
+	topics []string,
 	registry *executor.Registry,
 	producer *producer.Producer,
 	store *idempotency.Store,
@@ -46,7 +47,7 @@ func NewTaskConsumer(
 
 	return &TaskConsumer{
 		group:    group,
-		topic:    topic,
+		topics:   topics,
 		registry: registry,
 		producer: producer,
 		store:    store,
@@ -54,9 +55,9 @@ func NewTaskConsumer(
 }
 
 func (c *TaskConsumer) Start(ctx context.Context) {
-	logger.Log.Info("task-consumer: starting", zap.String("topic", c.topic))
+	logger.Log.Info("task-consumer: starting", zap.Strings("topics", c.topics))
 	for {
-		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
+		if err := c.group.Consume(ctx, c.topics, c); err != nil {
 			logger.Log.Error("task-consumer error", zap.Error(err))
 		}
 		if ctx.Err() != nil {

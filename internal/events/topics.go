@@ -1,9 +1,14 @@
 package events
 
+import "fmt"
+
 const (
 	TopicIncomingEvents   = "events"
 	TopicWorkflowTriggers = "workflow_triggers"
 	TopicExecutionEvents  = "execution_events"
-	TopicTaskQueue        = "task_queue"
 	TopicWorkerResults    = "worker_results"
 )
+
+func TaskTopic(stepName string) string {
+	return fmt.Sprintf("task.%s", stepName)
+}

@@ -52,20 +52,6 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	execID := uuid.New().String()
 
-	// Insert execution
-	_, err = tx.Exec(`
-		INSERT INTO workflow_executions
-		(id, tenant_id, workflow_name, trigger_id, status)
-		VALUES ($1,$2,$3,$4,'CREATED')
-	`,
-		execID,
-		trigger.TenantID,
-		trigger.WorkflowName,
-		trigger.TriggerID,
-	)
-	if err != nil {
-		return err
-	}
 
 	// Load workflow definition
 	var stepsJSON []byte
@@ -87,31 +73,12 @@ func (e *ExecutionEngine) HandleTrigger(
 		return err
 	}
 
-	// Insert step executions
-	for i, s := range steps {
-
-		stepID := uuid.New().String()
-
-		_, err := tx.Exec(`
-			INSERT INTO workflow_step_executions
-			(id, workflow_execution_id, step_name, status, step_index)
-			VALUES ($1,$2,$3,'PENDING',$4)
-		`,
-			stepID,
-			execID,
-			s["step"],
-			i,
-		)
-		if err != nil {
-			return err
-		}
-	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	logger.Log.Info("workflow execution created",
+	logger.Log.Info("workflow execution created (events only)",
 		zap.String("execution_id", execID),
 		zap.String("workflow", trigger.WorkflowName))
 
@@ -124,9 +91,16 @@ func (e *ExecutionEngine) HandleTrigger(
 			Timestamp:   time.Now(),
 		},
 		WorkflowID: trigger.WorkflowName,
+		Steps:      steps,
+		TenantID:   trigger.TenantID,
+		TriggerID:  trigger.TriggerID,
 	})
 
 	metrics.WorkflowsStarted.Inc()
+
+	// Small delay to allow state-projector to populate the read-model
+	// In a real pure event processor, Advance would be triggered by a consumer
+	time.Sleep(100 * time.Millisecond)
 
 	return e.AdvanceExecution(ctx, execID, trigger.CorrelationID)
 }
@@ -185,21 +159,6 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		})
 	}
 
-	// update step status
-	_, err = tx.Exec(`
-		UPDATE workflow_step_executions
-		SET status=$1, last_error=$2
-		WHERE workflow_execution_id=$3
-		  AND step_name=$4
-	`,
-		r.Status,
-		r.Error,
-		r.WorkflowExecutionID,
-		r.StepName,
-	)
-	if err != nil {
-		return err
-	}
 
 	if r.Status == model.StepFailed {
 
@@ -218,16 +177,6 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 
 		if retryCount >= 3 {
 
-			// fail workflow
-			_, err = tx.Exec(`
-				UPDATE workflow_executions
-				SET status=$1
-				WHERE id=$2
-			`, model.WorkflowFailed, r.WorkflowExecutionID)
-
-			if err != nil {
-				return err
-			}
 
 			metrics.WorkflowsFailed.Inc()
 
@@ -242,22 +191,6 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 			return tx.Commit()
 		}
 
-		// increment retry
-		_, err = tx.Exec(`
-			UPDATE workflow_step_executions
-			SET retry_count = retry_count + 1,
-			    status=$1
-			WHERE workflow_execution_id=$2
-			  AND step_name=$3
-		`,
-			model.StepPending,
-			r.WorkflowExecutionID,
-			r.StepName,
-		)
-
-		if err != nil {
-			return err
-		}
 
 		metrics.RetryCount.Inc()
 		logger.Log.Warn("step retried",

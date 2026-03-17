@@ -19,7 +19,7 @@ func (s *SendEmailExecutor) Execute(ctx context.Context, task model.WorkflowTask
 	defer span.End()
 
 	logger.Log.Info("sending email", zap.String("execution_id", task.WorkflowExecutionID))
-	time.Sleep(40 * time.Second)
+	time.Sleep(1 * time.Second)
 	logger.Log.Info("finished sending email", zap.String("execution_id", task.WorkflowExecutionID))
 	return nil
 }

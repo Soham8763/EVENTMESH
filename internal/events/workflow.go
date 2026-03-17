@@ -2,7 +2,10 @@ package events
 
 type WorkflowStartedEvent struct {
 	BaseEvent
-	WorkflowID string `json:"workflow_id"`
+	WorkflowID string                   `json:"workflow_id"`
+	Steps      []map[string]interface{} `json:"steps"`
+	TenantID   string                   `json:"tenant_id"`
+	TriggerID  string                   `json:"trigger_id"`
 }
 
 type WorkflowCompletedEvent struct {

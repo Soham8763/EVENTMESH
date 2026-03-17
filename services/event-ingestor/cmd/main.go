@@ -35,7 +35,7 @@ func main() {
 	authClient := auth.NewClient("http://localhost:8081")
 
 	idempotencyStore := idempotency.NewStore(
-		"localhost:6379",
+		"localhost:6380",
 		5*time.Minute,
 	)
 

@@ -6,6 +6,7 @@ use (
 	./services/rule-engine
 	./services/workflow-orchestrator
 	./services/worker
+	./services/state-projector
 	./pkg
 	./internal/events
 	./internal/kafka

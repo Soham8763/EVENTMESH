@@ -67,16 +67,6 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 	err = row.Scan(&stepID, &stepName)
 
 	if err == sql.ErrNoRows {
-		// no steps left → workflow complete
-		_, err = tx.Exec(`
-			UPDATE workflow_executions
-			SET status=$1
-			WHERE id=$2
-		`, model.WorkflowCompleted, execID)
-
-		if err != nil {
-			return err
-		}
 
 		metrics.WorkflowsCompleted.Inc()
 
@@ -97,27 +87,7 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 		return err
 	}
 
-	// mark step running
-	_, err = tx.Exec(`
-		UPDATE workflow_step_executions
-		SET status=$1
-		WHERE id=$2
-	`, model.StepRunning, stepID)
 
-	if err != nil {
-		return err
-	}
-
-	// mark workflow running
-	_, err = tx.Exec(`
-		UPDATE workflow_executions
-		SET status=$1
-		WHERE id=$2
-	`, model.WorkflowRunning, execID)
-
-	if err != nil {
-		return err
-	}
 
 	// emit task to Kafka
 	task := model.WorkflowTask{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/pkg/tracing"
@@ -61,7 +62,9 @@ func main() {
 		logger.Log.Fatal("failed to create failure producer", zap.Error(err))
 	}
 
-	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer)
+	eventPublisher := events.NewEventPublisher([]string{"localhost:19092"})
+
+	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer, eventPublisher)
 
 	// Start stuck workflow checker
 	stuckChecker := monitor.NewStuckChecker(db)

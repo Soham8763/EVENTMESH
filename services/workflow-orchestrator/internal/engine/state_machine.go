@@ -129,7 +129,9 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 		CreatedAt:           time.Now().UTC(),
 	}
 
-	if err := e.producer.Publish(ctx, execID, task); err != nil {
+	// Emit task to step-specific Kafka topic
+	taskTopic := events.TaskTopic(stepName)
+	if err := e.producer.Publish(ctx, execID, task, taskTopic); err != nil {
 		return err
 	}
 

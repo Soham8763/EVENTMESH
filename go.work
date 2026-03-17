@@ -8,4 +8,5 @@ use (
 	./services/worker
 	./pkg
 	./internal/events
+	./internal/kafka
 )

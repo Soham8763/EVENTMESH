@@ -15,7 +15,7 @@ services:
     image: redis:7
     container_name: eventmesh-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
 
   redpanda:
     image: redpandadata/redpanda:v23.3.3

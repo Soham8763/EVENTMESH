@@ -1,13 +1,14 @@
 go 1.25.5
 
 use (
+	./examples/order-workflow
+	./internal/events
+	./internal/kafka
+	./pkg
 	./services/auth-service
 	./services/event-ingestor
 	./services/rule-engine
-	./services/workflow-orchestrator
-	./services/worker
 	./services/state-projector
-	./pkg
-	./internal/events
-	./internal/kafka
+	./services/worker
+	./services/workflow-orchestrator
 )

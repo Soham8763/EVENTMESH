@@ -89,11 +89,22 @@ func main() {
 		logger.Log.Fatal("failed to create result consumer", zap.Error(err))
 	}
 
+	registryConsumer, err := consumer.NewRegistryConsumer(
+		[]string{"localhost:19092"},
+		"workflow-registry-group",
+		events.TopicWorkflowRegistrations,
+		execEngine,
+	)
+	if err != nil {
+		logger.Log.Fatal("failed to create registry consumer", zap.Error(err))
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go triggerConsumer.Start(ctx)
 	go resultConsumer.Start(ctx)
+	go registryConsumer.Start(ctx)
 	go stuckChecker.Start(ctx)
 
 	logger.Log.Info("orchestrator ready and consuming")

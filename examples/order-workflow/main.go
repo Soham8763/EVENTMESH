@@ -18,19 +18,25 @@ func SendEmail(ctx context.Context, data []byte) error {
 }
 
 func main() {
-	workflow := sdk.NewWorkflow("order-processing")
+	client := sdk.NewClient([]string{"localhost:19092"})
+	sdk.SetDefaultClient(client)
 
-	workflow.Step("reserve_inventory", ReserveInventory)
-	workflow.Step("process_payment", ProcessPayment)
-	workflow.Step("send_email", SendEmail)
+	workflow := sdk.NewWorkflow("order-processing").
+		Step("reserve_inventory", ReserveInventory).
+		Step("process_payment", ProcessPayment).
+		Step("send_email", SendEmail)
+
+	ctx := context.Background()
+
+	// Register workflow definition dynamically
+	if err := workflow.Register(ctx); err != nil {
+		panic(err)
+	}
 
 	worker := sdk.NewWorker()
-
 	worker.Register("reserve_inventory", ReserveInventory)
 	worker.Register("process_payment", ProcessPayment)
 	worker.Register("send_email", SendEmail)
 
-	client := sdk.NewClient([]string{"localhost:19092"})
-
-	client.StartWorkflow(context.Background(), "order-processing", "exec_123")
+	client.StartWorkflow(ctx, "order-processing", "exec_123")
 }

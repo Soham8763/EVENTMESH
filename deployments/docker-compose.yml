@@ -36,10 +36,30 @@ services:
       - --kafka-addr
       - "internal://0.0.0.0:9092,external://0.0.0.0:19092"
       - --advertise-kafka-addr
-      - "internal://redpanda:9092,external://localhost:19092"
+      - "internal://redpanda:9092,external://127.0.0.1:19092"
     ports:
       - "19092:19092"
       - "9644:9644"
+
+  prometheus:
+    image: prom/prometheus
+    container_name: eventmesh-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana
+    container_name: eventmesh-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
 
 volumes:
   postgres_data:

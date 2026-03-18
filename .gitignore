@@ -33,3 +33,12 @@ go.work.sum
 /logs
 run-services.sh
 /assets
+/bin
+
+# log files
+*.log
+# Local binaries
+/main
+/order-workflow
+/examples/order-workflow/main
+/bin/

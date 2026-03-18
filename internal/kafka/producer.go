@@ -8,16 +8,17 @@ import (
 )
 
 type Producer struct {
-	writer *kafka.Writer
+	writer       *kafka.Writer
+	defaultTopic string
 }
 
 func NewProducer(brokers []string, topic string) *Producer {
 	return &Producer{
 		writer: &kafka.Writer{
 			Addr:     kafka.TCP(brokers...),
-			Topic:    topic,
 			Balancer: &kafka.LeastBytes{},
 		},
+		defaultTopic: topic,
 	}
 }
 
@@ -29,12 +30,17 @@ func (p *Producer) PublishToTopic(ctx context.Context, topic string, key string,
 	msg := kafka.Message{
 		Key:   []byte(key),
 		Value: value,
-		Topic: topic,
 	}
+
+	activeTopic := topic
+	if activeTopic == "" {
+		activeTopic = p.defaultTopic
+	}
+	msg.Topic = activeTopic
 
 	err := p.writer.WriteMessages(ctx, msg)
 	if err != nil {
-		log.Println("kafka publish error:", err)
+		log.Printf("kafka publish error (topic: %s, key: %s): %v\n", activeTopic, key, err)
 	}
 
 	return err

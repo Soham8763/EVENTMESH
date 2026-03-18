@@ -49,7 +49,7 @@ func main() {
 	m := matcher.NewMatcher(rules)
 
 	p, err := producer.NewProducer(
-		[]string{"localhost:19092"},
+		[]string{"127.0.0.1:19092"},
 		"workflow_triggers",
 	)
 	if err != nil {
@@ -57,7 +57,7 @@ func main() {
 	}
 
 	eventConsumer, err := consumer.NewEventConsumer(
-		[]string{"localhost:19092"},
+		[]string{"127.0.0.1:19092"},
 		"rule-engine-group",
 		"events",
 		m,

@@ -48,7 +48,7 @@ func main() {
 	logger.Log.Info("loaded workflow definitions", zap.Int("count", len(defs)))
 
 	taskProducer, err := producer.NewProducer(
-		[]string{"localhost:19092"},
+		[]string{"127.0.0.1:19092"},
 		"workflow_tasks",
 	)
 	if err != nil {
@@ -56,13 +56,13 @@ func main() {
 	}
 
 	failureProducer, err := producer.NewFailureProducer(
-		[]string{"localhost:19092"},
+		[]string{"127.0.0.1:19092"},
 	)
 	if err != nil {
 		logger.Log.Fatal("failed to create failure producer", zap.Error(err))
 	}
 
-	eventPublisher := events.NewEventPublisher([]string{"localhost:19092"})
+	eventPublisher := events.NewEventPublisher([]string{"127.0.0.1:19092"})
 
 	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer, eventPublisher)
 
@@ -70,8 +70,8 @@ func main() {
 	stuckChecker := monitor.NewStuckChecker(db)
 
 	triggerConsumer, err := consumer.NewTriggerConsumer(
-		[]string{"localhost:19092"},
-		"workflow-orchestrator-group",
+		[]string{"127.0.0.1:19092"},
+		"orchestrator-triggers-v2",
 		"workflow_triggers",
 		execEngine,
 	)
@@ -80,8 +80,8 @@ func main() {
 	}
 
 	resultConsumer, err := consumer.NewResultConsumer(
-		[]string{"localhost:19092"},
-		"workflow-results-group",
+		[]string{"127.0.0.1:19092"},
+		"orchestrator-results-v2",
 		"workflow_task_results",
 		execEngine,
 	)
@@ -90,8 +90,8 @@ func main() {
 	}
 
 	registryConsumer, err := consumer.NewRegistryConsumer(
-		[]string{"localhost:19092"},
-		"workflow-registry-group",
+		[]string{"127.0.0.1:19092"},
+		"orchestrator-registry-v2",
 		events.TopicWorkflowRegistrations,
 		execEngine,
 	)

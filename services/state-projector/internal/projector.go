@@ -6,6 +6,7 @@ import (
 
 	"eventmesh/internal/events"
 	"eventmesh/internal/kafka"
+	"eventmesh/pkg/metrics"
 
 	"database/sql"
 )
@@ -39,5 +40,6 @@ func (p *Projector) Start(ctx context.Context) {
 		}
 
 		p.handleEvent(msg.Value)
+		metrics.EventsProcessed.WithLabelValues("projected").Inc()
 	}
 }

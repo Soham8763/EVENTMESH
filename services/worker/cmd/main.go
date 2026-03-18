@@ -50,7 +50,7 @@ func main() {
 		}
 	}()
 
-	brokers := []string{"localhost:19092"}
+	brokers := []string{"127.0.0.1:19092"}
 
 	// Initialize idempotency store
 	store := idempotency.NewStore("localhost:6380", 10*time.Minute)

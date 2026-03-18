@@ -40,7 +40,7 @@ func main() {
 	)
 
 	eventProducer, err := producer.NewProducer(
-		[]string{"localhost:19092"},
+		[]string{"127.0.0.1:19092"},
 		"events",
 	)
 	if err != nil {

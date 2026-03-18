@@ -84,6 +84,38 @@ var (
 			Help: "Last worker heartbeat Unix timestamp",
 		},
 	)
+
+	// New Metrics (Phase 7)
+	EventsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "eventmesh_events_processed_total",
+			Help: "Total number of processed events",
+		},
+		[]string{"type"},
+	)
+
+	WorkflowExecutions = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "eventmesh_workflow_executions_total",
+			Help: "Total workflow executions",
+		},
+	)
+
+	StepExecutions = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "eventmesh_step_executions_total",
+			Help: "Total step executions",
+		},
+		[]string{"step", "status"},
+	)
+
+	WorkerThroughput = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "eventmesh_worker_throughput_total",
+			Help: "Total execution throughput by worker",
+		},
+		[]string{"worker_id", "capability"},
+	)
 )
 
 func Init() {
@@ -99,5 +131,9 @@ func Init() {
 		RetryCount,
 		StuckWorkflows,
 		WorkerHeartbeat,
+		EventsProcessed,
+		WorkflowExecutions,
+		StepExecutions,
+		WorkerThroughput,
 	)
 }

@@ -140,6 +140,7 @@ func (c *TaskConsumer) ConsumeClaim(
 
 		metrics.TasksProcessed.Inc()
 		metrics.TaskDuration.Observe(duration)
+		metrics.WorkerThroughput.WithLabelValues("worker-1", task.StepName).Inc() // Hardcoded worker-1 for now, in prod this would be os.Hostname()
 
 		// prepare result
 		result := model.TaskResult{
@@ -159,8 +160,10 @@ func (c *TaskConsumer) ConsumeClaim(
 			errMsg := err.Error()
 			result.Status = "FAILED"
 			result.Error = &errMsg
+			metrics.StepExecutions.WithLabelValues(task.StepName, "failed").Inc()
 		} else {
 			result.Status = "SUCCESS"
+			metrics.StepExecutions.WithLabelValues(task.StepName, "completed").Inc()
 		}
 
 		// publish result

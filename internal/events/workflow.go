@@ -1,5 +1,7 @@
 package events
 
+import "time"
+
 type WorkflowStartedEvent struct {
 	BaseEvent
 	WorkflowID string                   `json:"workflow_id"`
@@ -21,4 +23,13 @@ type WorkflowDefinedEvent struct {
 	BaseEvent
 	WorkflowName string                   `json:"workflow_name"`
 	Steps        []map[string]interface{} `json:"steps"`
+}
+
+type WorkflowTriggerEvent struct {
+	TriggerID     string    `json:"trigger_id"`
+	EventID       string    `json:"event_id"`
+	TenantID      string    `json:"tenant_id"`
+	WorkflowName  string    `json:"workflow_name"`
+	CorrelationID string    `json:"correlation_id"`
+	TriggeredAt   time.Time `json:"triggered_at"`
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"eventmesh/pkg/sdk"
+	"github.com/google/uuid"
 )
 
 func ReserveInventory(ctx context.Context, data []byte) error {
@@ -18,7 +19,7 @@ func SendEmail(ctx context.Context, data []byte) error {
 }
 
 func main() {
-	client := sdk.NewClient([]string{"localhost:19092"})
+	client := sdk.NewClient([]string{"127.0.0.1:19092"})
 	sdk.SetDefaultClient(client)
 
 	workflow := sdk.NewWorkflow("order-processing").
@@ -38,5 +39,5 @@ func main() {
 	worker.Register("process_payment", ProcessPayment)
 	worker.Register("send_email", SendEmail)
 
-	client.StartWorkflow(ctx, "order-processing", "exec_123")
+	client.StartWorkflow(ctx, "order-processing", uuid.New().String())
 }

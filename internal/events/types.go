@@ -13,4 +13,5 @@ const (
 	StepFailed    EventType = "step.failed"
 
 	RetryScheduled EventType = "retry.scheduled"
+	WorkflowDefined EventType = "workflow.defined"
 )

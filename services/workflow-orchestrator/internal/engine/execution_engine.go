@@ -203,10 +203,27 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		return err
 	}
 
-	if r.Status == model.StepSuccess {
-		return e.AdvanceExecution(ctx, r.WorkflowExecutionID, r.CorrelationID)
+	return nil
+}
+
+func (e *ExecutionEngine) HandleWorkflowDefined(ctx context.Context, event events.WorkflowDefinedEvent) error {
+	stepsJSON, err := json.Marshal(event.Steps)
+	if err != nil {
+		return err
 	}
 
+	_, err = e.db.Exec(`
+		INSERT INTO workflow_definitions (name, steps, created_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (name) DO UPDATE SET steps = $2
+	`, event.WorkflowName, stepsJSON, event.Timestamp)
+
+	if err != nil {
+		logger.Log.Error("failed to register workflow", zap.Error(err), zap.String("workflow", event.WorkflowName))
+		return err
+	}
+
+	logger.Log.Info("workflow registered", zap.String("workflow", event.WorkflowName))
 	return nil
 }
 

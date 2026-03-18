@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'eventmesh-ingestor'
+    static_configs:
+      - targets: ['host.docker.internal:2112']
+
+  - job_name: 'eventmesh-orchestrator'
+    static_configs:
+      - targets: ['host.docker.internal:2113']
+
+  - job_name: 'eventmesh-worker'
+    static_configs:
+      - targets: ['host.docker.internal:2114']
+
+  - job_name: 'eventmesh-projector'
+    static_configs:
+      - targets: ['host.docker.internal:2115']

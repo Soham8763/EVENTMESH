@@ -6,7 +6,7 @@ We take the security of EventMesh seriously. If you believe you have found a sec
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please send an email to <soham@eventmesh.io> (fictional for demo).
+Instead, please send an email to <soham7857@gmail.com>
 
 ### Scope
 

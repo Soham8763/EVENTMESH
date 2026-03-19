@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"eventmesh/event-ingestor/internal/api"
@@ -32,15 +33,29 @@ func main() {
 			logger.Log.Error("metrics server failed", zap.Error(err))
 		}
 	}()
-	authClient := auth.NewClient("http://localhost:8081")
+	authURL := os.Getenv("AUTH_SERVICE_URL")
+	if authURL == "" {
+		authURL = "http://localhost:8081"
+	}
+	authClient := auth.NewClient(authURL)
 
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6380"
+	}
 	idempotencyStore := idempotency.NewStore(
-		"localhost:6380",
+		redisAddr,
 		5*time.Minute,
 	)
 
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	brokers := []string{kafkaBroker}
+	if kafkaBroker == "" {
+		brokers = []string{"127.0.0.1:19092"}
+	}
+
 	eventProducer, err := producer.NewProducer(
-		[]string{"127.0.0.1:19092"},
+		brokers,
 		"events",
 	)
 	if err != nil {

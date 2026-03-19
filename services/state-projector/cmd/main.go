@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
@@ -32,7 +33,16 @@ func main() {
 		}
 	}()
 
-	dsn := "postgres://eventmesh:eventmesh@localhost:5432/eventmesh?sslmode=disable"
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	brokers := []string{kafkaBroker}
+	if kafkaBroker == "" {
+		brokers = []string{"127.0.0.1:19092"}
+	}
+
+	dsn := os.Getenv("POSTGRES_URL")
+	if dsn == "" {
+		dsn = "postgres://eventmesh:eventmesh@localhost:5432/eventmesh?sslmode=disable"
+	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
@@ -45,7 +55,7 @@ func main() {
 
 	projector := internal.NewProjector(
 		db,
-		[]string{"127.0.0.1:19092"},
+		brokers,
 	)
 
 	log.Println("state-projector: starting...")

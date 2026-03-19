@@ -27,10 +27,10 @@ func main() {
 
 	metrics.Init()
 
-	// Expose Prometheus metrics on port 2115
+	// Expose Prometheus metrics on port 2117
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(":2115", nil); err != nil {
+		if err := http.ListenAndServe(":2117", nil); err != nil {
 			logger.Log.Error("metrics server failed", zap.Error(err))
 		}
 	}()
@@ -48,8 +48,14 @@ func main() {
 
 	m := matcher.NewMatcher(rules)
 
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	brokers := []string{kafkaBroker}
+	if kafkaBroker == "" {
+		brokers = []string{"127.0.0.1:19092"}
+	}
+
 	p, err := producer.NewProducer(
-		[]string{"127.0.0.1:19092"},
+		brokers,
 		"workflow_triggers",
 	)
 	if err != nil {
@@ -57,7 +63,7 @@ func main() {
 	}
 
 	eventConsumer, err := consumer.NewEventConsumer(
-		[]string{"127.0.0.1:19092"},
+		brokers,
 		"rule-engine-group",
 		"events",
 		m,

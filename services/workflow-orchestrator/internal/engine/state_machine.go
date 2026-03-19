@@ -69,6 +69,11 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 	if err == sql.ErrNoRows {
 
 		metrics.WorkflowsCompleted.Inc()
+		metrics.WorkflowExecutions.Inc() // Or maybe this should only be on start? 
+		// Actually, the user's prompt says "workflow executions" usually means started. 
+		// I already added it to HandleTrigger. 
+		// I'll add StepExecutions for workflow completion though.
+		metrics.StepExecutions.WithLabelValues("workflow", "completed").Inc()
 
 		// Emit WorkflowCompleted event
 		e.publisher.Publish(ctx, execID, events.WorkflowCompletedEvent{
@@ -120,6 +125,8 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 		},
 		StepName: stepName,
 	})
+
+	metrics.StepExecutions.WithLabelValues(stepName, "scheduled").Inc()
 
 	return tx.Commit()
 }

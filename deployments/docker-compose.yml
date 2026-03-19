@@ -10,12 +10,22 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventmesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7
     container_name: eventmesh-redis
     ports:
       - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redpanda:
     image: redpandadata/redpanda:v23.3.3
@@ -40,6 +50,110 @@ services:
     ports:
       - "19092:19092"
       - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- EventMesh Services ---
+
+  auth-service:
+    build:
+      context: ..
+      dockerfile: services/auth-service/Dockerfile
+    container_name: eventmesh-auth
+    environment:
+      - POSTGRES_URL=postgres://eventmesh:eventmesh@postgres:5432/eventmesh?sslmode=disable
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  event-ingestor:
+    build:
+      context: ..
+      dockerfile: services/event-ingestor/Dockerfile
+    container_name: eventmesh-ingestor
+    environment:
+      - KAFKA_BROKER=redpanda:9092
+      - REDIS_ADDR=redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:8081
+    ports:
+      - "8080:8080"
+      - "2112:2112"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  rule-engine:
+    build:
+      context: ..
+      dockerfile: services/rule-engine/Dockerfile
+    container_name: eventmesh-rule-engine
+    environment:
+      - KAFKA_BROKER=redpanda:9092
+      - POSTGRES_URL=postgres://eventmesh:eventmesh@postgres:5432/eventmesh?sslmode=disable
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  workflow-orchestrator:
+    build:
+      context: ..
+      dockerfile: services/workflow-orchestrator/Dockerfile
+    container_name: eventmesh-orchestrator
+    environment:
+      - KAFKA_BROKER=redpanda:9092
+      - POSTGRES_URL=postgres://eventmesh:eventmesh@postgres:5432/eventmesh?sslmode=disable
+    ports:
+      - "2113:2113"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
+    container_name: eventmesh-worker
+    environment:
+      - KAFKA_BROKER=redpanda:9092
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "2114:2114"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  state-projector:
+    build:
+      context: ..
+      dockerfile: services/state-projector/Dockerfile
+    container_name: eventmesh-state-projector
+    environment:
+      - KAFKA_BROKER=redpanda:9092
+      - POSTGRES_URL=postgres://eventmesh:eventmesh@postgres:5432/eventmesh?sslmode=disable
+    ports:
+      - "2115:2115"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # --- Observability ---
 
   prometheus:
     image: prom/prometheus
@@ -48,8 +162,11 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - event-ingestor
+      - workflow-orchestrator
+      - worker
+      - state-projector
 
   grafana:
     image: grafana/grafana
@@ -58,6 +175,8 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
 

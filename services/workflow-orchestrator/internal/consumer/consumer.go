@@ -6,7 +6,7 @@ import (
 
 	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
-	"eventmesh/workflow-orchestrator/internal/model"
+	"eventmesh/pkg/metrics"
 
 	"github.com/IBM/sarama"
 	"go.opentelemetry.io/otel"
@@ -15,7 +15,7 @@ import (
 )
 
 type Engine interface {
-	HandleTrigger(ctx context.Context, trigger model.WorkflowTriggerEvent) error
+	HandleTrigger(ctx context.Context, trigger events.WorkflowTriggerEvent) error
 	HandleWorkflowDefined(ctx context.Context, event events.WorkflowDefinedEvent) error
 }
 
@@ -48,6 +48,7 @@ func NewTriggerConsumer(
 }
 
 func (c *TriggerConsumer) Start(ctx context.Context) {
+	logger.Log.Info("trigger-consumer starting", zap.String("topic", c.topic))
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
 			logger.Log.Error("trigger consumer error", zap.Error(err))
@@ -63,7 +64,16 @@ func (c *TriggerConsumer) ConsumeClaim(
 	claim sarama.ConsumerGroupClaim,
 ) error {
 
+	logger.Log.Info("trigger-consumer: ConsumeClaim started",
+		zap.String("topic", claim.Topic()),
+		zap.Int32("partition", claim.Partition()),
+		zap.Int64("initialOffset", claim.InitialOffset()))
+
 	for msg := range claim.Messages() {
+		logger.Log.Info("trigger-consumer: received message",
+			zap.Int64("offset", msg.Offset),
+			zap.String("key", string(msg.Key)))
+
 		// Extract tracing context from headers
 		carrier := propagation.MapCarrier{}
 		for _, h := range msg.Headers {
@@ -71,7 +81,7 @@ func (c *TriggerConsumer) ConsumeClaim(
 		}
 		ctx := otel.GetTextMapPropagator().Extract(session.Context(), carrier)
 
-		var trigger model.WorkflowTriggerEvent
+		var trigger events.WorkflowTriggerEvent
 
 		if err := json.Unmarshal(msg.Value, &trigger); err != nil {
 			logger.Log.Error("invalid trigger message", zap.Error(err))
@@ -79,10 +89,22 @@ func (c *TriggerConsumer) ConsumeClaim(
 			continue
 		}
 
+		logger.Log.Info("trigger-consumer: parsed trigger",
+			zap.String("workflow", trigger.WorkflowName),
+			zap.String("trigger_id", trigger.TriggerID))
+
 		if err := c.engine.HandleTrigger(ctx, trigger); err != nil {
-			logger.Log.Error("failed to handle trigger", zap.Error(err))
+			logger.Log.Error("failed to handle trigger",
+				zap.Error(err),
+				zap.String("workflow", trigger.WorkflowName))
+			session.MarkMessage(msg, "")
 			continue
 		}
+
+		logger.Log.Info("trigger-consumer: trigger handled successfully",
+			zap.String("workflow", trigger.WorkflowName))
+
+		metrics.EventsProcessed.WithLabelValues("trigger").Inc()
 
 		session.MarkMessage(msg, "")
 	}
@@ -119,6 +141,7 @@ func NewRegistryConsumer(
 }
 
 func (c *RegistryConsumer) Start(ctx context.Context) {
+	logger.Log.Info("registry-consumer starting", zap.String("topic", c.topic))
 	for {
 		if err := c.group.Consume(ctx, []string{c.topic}, c); err != nil {
 			logger.Log.Error("registry consumer error", zap.Error(err))
@@ -146,6 +169,8 @@ func (c *RegistryConsumer) ConsumeClaim(
 			logger.Log.Error("failed to handle registration", zap.Error(err))
 			continue
 		}
+
+		metrics.EventsProcessed.WithLabelValues("registration").Inc()
 
 		session.MarkMessage(msg, "")
 	}

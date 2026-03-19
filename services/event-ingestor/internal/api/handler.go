@@ -140,6 +140,8 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.EventsProcessed.WithLabelValues("ingested").Inc()
+
 	// 8. Return 200
 	resp := model.IngestEventResponse{
 		Status:   "accepted",

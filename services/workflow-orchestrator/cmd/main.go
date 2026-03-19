@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 
 	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
@@ -47,8 +48,14 @@ func main() {
 
 	logger.Log.Info("loaded workflow definitions", zap.Int("count", len(defs)))
 
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	brokers := []string{kafkaBroker}
+	if kafkaBroker == "" {
+		brokers = []string{"127.0.0.1:19092"}
+	}
+
 	taskProducer, err := producer.NewProducer(
-		[]string{"localhost:19092"},
+		brokers,
 		"workflow_tasks",
 	)
 	if err != nil {
@@ -56,13 +63,13 @@ func main() {
 	}
 
 	failureProducer, err := producer.NewFailureProducer(
-		[]string{"localhost:19092"},
+		brokers,
 	)
 	if err != nil {
 		logger.Log.Fatal("failed to create failure producer", zap.Error(err))
 	}
 
-	eventPublisher := events.NewEventPublisher([]string{"localhost:19092"})
+	eventPublisher := events.NewEventPublisher(brokers)
 
 	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer, eventPublisher)
 
@@ -70,8 +77,8 @@ func main() {
 	stuckChecker := monitor.NewStuckChecker(db)
 
 	triggerConsumer, err := consumer.NewTriggerConsumer(
-		[]string{"localhost:19092"},
-		"workflow-orchestrator-group",
+		brokers,
+		"orchestrator-triggers-v2",
 		"workflow_triggers",
 		execEngine,
 	)
@@ -80,8 +87,8 @@ func main() {
 	}
 
 	resultConsumer, err := consumer.NewResultConsumer(
-		[]string{"localhost:19092"},
-		"workflow-results-group",
+		brokers,
+		"orchestrator-results-v2",
 		"workflow_task_results",
 		execEngine,
 	)
@@ -90,8 +97,8 @@ func main() {
 	}
 
 	registryConsumer, err := consumer.NewRegistryConsumer(
-		[]string{"localhost:19092"},
-		"workflow-registry-group",
+		brokers,
+		"orchestrator-registry-v2",
 		events.TopicWorkflowRegistrations,
 		execEngine,
 	)

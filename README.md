@@ -6,6 +6,9 @@
   <p align="center">
     A production-grade, event-driven backend platform built in Go for reliable ingestion, rule-based routing, and stateful workflow execution across distributed workers.
   </p>
+  <p align="center">
+    <i>"Plug-and-Play Infrastructure for Distributed Systems"</i>
+  </p>
 </p>
 
 **Language** 🛠
@@ -34,42 +37,128 @@
 
 ---
 
-## Table of Contents
-
+- [The EventMesh Experience](#the-eventmesh-experience-from-zero-to-mesh-in-60s)
+- [Plug-and-Play Quick Start](#plug-and-play-quick-start)
+- [How It Reduces Code Complexity](#how-it-reduces-code-complexity)
+- [Developer & User Guides](#developer-and-user-guides)
 - [Project Summary](#project-summary)
 - [Problem Statement](#problem-statement)
-- [Why This Project Exists](#why-this-project-exists)
-- [Key Features](#key-features)
 - [Architecture Overview](#architecture-overview)
 - [Execution Flow](#execution-flow)
 - [State Machine](#state-machine)
-- [Failure Recovery](#failure-recovery)
 - [Deep Dive Documentation](#deep-dive-documentation)
-- [System Design Principles](#system-design-principles)
-- [Core Concepts](#core-concepts)
-- [How It Works — Step by Step](#how-it-works--step-by-step)
-- [Scalability Model](#scalability-model)
-- [Fault Tolerance Model](#fault-tolerance-model)
-- [Consistency Guarantees](#consistency-guarantees)
-- [Idempotency Design](#idempotency-design)
-- [Retry Mechanism](#retry-mechanism)
-- [Distributed Coordination Model](#distributed-coordination-model)
-- [Performance Proof](#performance-proof)
-- [Engineering Insights](#engineering-insights)
 - [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Local Setup](#local-setup)
-- [Running the System](#running-the-system)
 - [Observability](#observability)
 - [Chaos Testing](#chaos-testing)
 - [Production Readiness](#production-readiness)
 - [Current Progress](#current-progress)
-- [Future Roadmap](#future-roadmap)
-- [Why This Project Is Impressive](#why-this-project-is-impressive)
-- [Interview Talking Points](#interview-talking-points)
-- [Contributing](#contributing)
 - [License](#license)
-- [Author](#author)
+
+---
+
+## ⚡ The EventMesh Experience: From Zero to Mesh in 60s
+
+EventMesh is designed to feel like **Redis for distributed workflows**. You don't build the infrastructure; you just use it. 
+
+### Why Use EventMesh?
+- **Zero Boilerplate**: No need to write Kafka producers, consumer groups, retry loops, or persistence logic.
+- **Minimalist Engineering**: Reduce thousands of lines of distributed systems code to simple business logic implementations.
+- **Plug-and-Play**: A single command brings up the entire stack, including a "WOW factor" observability suite.
+- **Deterministic Reliability**: Built-in idempotency and lease-based coordination ensure tasks never run twice and never get lost.
+
+---
+
+## 🚀 Plug-and-Play Quick Start
+
+The fastest way to experience EventMesh is using the unified Docker Compose stack. It starts all **6 core services**, infrastructure (Redpanda, Postgres, Redis), and the observability suite (Prometheus, Grafana) with zero manual configuration.
+
+### 1. Start everything
+`docker-compose.yml` is located in the `deployments/` directory.
+
+```bash
+cd deployments
+docker compose up --build -d
+```
+
+### 2. Verify Observability
+Once the containers are healthy, access the **auto-provisioned** Grafana dashboard:
+- **URL**: [http://localhost:3000](http://localhost:3000)
+- **Login**: `admin` / `admin`
+- **Dashboard**: Search for "EventMesh Dashboard"
+
+![EventMesh Dashboard Metrics](file:///Users/soham/.gemini/antigravity/brain/8babb75e-4276-4dcb-95b1-698ad84f7ab9/eventmesh_dashboard_metrics_1773917849830.png)
+*Above: The auto-provisioned dashboard showing 5 workflow executions and real-time event throughput.*
+
+### 3. Trigger a test workflow
+Run the provided example to see the system in action:
+
+```bash
+# Initialize the DB schema (first time only)
+cat setup_db.sql | docker exec -i eventmesh-postgres psql -U eventmesh -d eventmesh
+
+# Run the order workflow example
+go run examples/order-workflow/main.go
+```
+
+---
+
+## 📉 How It Reduces Code Complexity
+
+In a traditional architecture, building a reliable multi-step workflow requires:
+1.  **Kafka Plumbing**: Producers, Consumers, Error Handling, Retries.
+2.  **State Management**: SQL transactions, status tracking, checkpointing.
+3.  **Idempotency**: Redis keys, locks, duplicate prevention logic.
+4.  **Observability**: Prometheus metrics, traces, heartbeats.
+
+**With EventMesh, you ONLY write the business logic.**
+
+| Requirement | Traditional Way | EventMesh Way |
+|-------------|-----------------|---------------|
+| **Ingestion** | Write HTTP handler + Validation + Kafka Producer | `POST /events` (Handled) |
+| **Retries** | Exponential backoff logic + Persistence | Configurable Rules (Handled) |
+| **Worker Logic** | Kafka Consumer + Database Transaction + Scaling | Implement 1 function (Executor) |
+| **Monitoring** | Grafana dashboard design + Query writing | Zero-Config (Auto-Provisioned) |
+
+---
+
+## 🛠 Developer & User Guides
+
+### 1. Ingesting Events (The "Developer" View)
+Ingesting an event into the mesh is as simple as a single SDK call or HTTP POST. EventMesh handles the auth, idempotency, and routing automatically.
+
+```go
+// Using the EventMesh SDK
+err := sdk.Publish(ctx, eventmesh.Event{
+    Type:           "order.placed",
+    IdempotencyKey: "order_12345",
+    Payload:        map[string]interface{}{"order_id": 123},
+})
+```
+
+### 2. Implementing a Task Worker (The "Engineer" View)
+Engineers don't need to know about Kafka or Postgres. They just implement the `Executor` interface for their specific task.
+
+```go
+// minimal business logic
+type OrderProcessor struct{}
+
+func (p *OrderProcessor) Execute(ctx context.Context, task *model.Task) (*model.TaskResult, error) {
+    // 1. Do your business work (e.g. process payment)
+    log.Printf("Processing order: %s", task.ExecutionID)
+    
+    // 2. Return the result - EventMesh handles all the rest!
+    return model.SuccessResult(task.ID), nil
+}
+```
+
+### 3. Defining Workflows (The "User" View)
+Users define business flows by registering rules and workflow definitions. No code needed.
+
+```sql
+-- "When an order.placed event arrives, start the fulfill_order workflow"
+INSERT INTO rules (tenant_id, event_type, workflow_name) 
+VALUES ('acme-corp', 'order.placed', 'fulfillment_wf');
+```
 
 ---
 
@@ -113,19 +202,14 @@ Every design decision is intentional. Every failure mode is handled. Every compo
 
 ---
 
-## Key Features
-
-- **Event Ingestion** — HTTP-based intake with validation, enrichment, and idempotency enforcement via Redis
-- **Multi-Tenant Isolation** — API key authentication with tenant-scoped event processing
-- **Rule Engine** — Configurable event-to-workflow mapping with tenant-isolated rule matching
-- **Workflow Orchestration** — Stateful, crash-safe execution engine with SQL-transactioned state machine
-- **Distributed Workers** — Horizontally scalable task executors with lease-based coordination
-- **Retry with Backoff** — Automatic retry up to configurable limits with failure escalation
-- **Idempotent Execution** — Dual-layer idempotency (ingestion + worker) preventing duplicate processing
-- **Failure Event Stream** — Dedicated Kafka topic for workflow failures, enabling downstream alerting
-- **Stuck Workflow Detection** — Background monitor that detects and reports stalled executions
-- **Full Observability** — Prometheus metrics (11 counters/gauges/histograms), OpenTelemetry distributed tracing, structured Zap logging
-- **Chaos Tested** — Validated under worker crashes, broker restarts, Redis/Postgres failures, duplicate storms, and load spikes
+- **Zero-Boilerplate Ingestion** — Production-ready HTTP intake with built-in auth and validation.
+- **Transactional State Machine** — Crash-safe workflow orchestration using SQL transactions.
+- **Dual-Layer Idempotency** — Exactly-once guarantees at both ingestion and execution levels.
+- **Lease-Based Workers** — Horizontally scalable execution pool with automatic failure recovery.
+- **Visual Observability** — "WOW factor" Grafana dashboards with real-time metrics and traces.
+- **Unified 12-Container Stack** — The entire infrastructure and services in a single `up` command.
+- **Multi-Tenant Isolation** — Native support for multiple tenants with isolated rules and data.
+- **Chaos-Validated** — Hardened against network partitions, worker crashes, and broker failures.
 
 ---
 
@@ -143,7 +227,7 @@ Client → Event Ingestor → Kafka [events] → Rule Engine → Kafka [triggers
                                                     Kafka [tasks] → Workers
 ```
 
-The system is composed of **5 independent services** communicating exclusively through Kafka topics:
+The system is composed of **6 independent services** communicating exclusively through Kafka topics:
 
 | Service | Role | Port |
 |---------|------|------|
@@ -151,15 +235,18 @@ The system is composed of **5 independent services** communicating exclusively t
 | **Event Ingestor** | HTTP intake, validation, idempotency, publishing | `:8080` |
 | **Rule Engine** | Event consumption, rule matching, trigger emission | — |
 | **Workflow Orchestrator** | State machine, execution management, result handling | — |
-| **Worker** | Task consumption, lease-based execution, result publishing | — |
+| **Worker** | Task consumption, lease-based coordination, execution | — |
+| **State Projector** | Real-time monitoring of workflow lifecycle | — |
 
 **Infrastructure dependencies:**
 
 | Component | Purpose |
 |-----------|---------|
-| **PostgreSQL 15** | Durable state: API keys, rules, workflow definitions, executions, step state |
-| **Redis 7** | Idempotency keys (TTL), task locks (SetNX), worker leases (30s TTL) |
-| **Redpanda v23.3.3** | Kafka-compatible event streaming across 5 topics |
+| **PostgreSQL 15** | Durable state: API keys, rules, workflow definitions |
+| **Redis 7** | Idempotency keys, task locks, worker leases |
+| **Redpanda v23.3.3** | Kafka-compatible event streaming across topics |
+| **Prometheus** | Metric collection and storage |
+| **Grafana** | Zero-config dashboard visualization |
 
 ---
 
@@ -492,7 +579,7 @@ There is no service mesh, no distributed lock manager, and no leader election. C
 
 | Category | Technology | Purpose |
 |----------|------------|---------|
-| **Language** | Go 1.25 | All services, chosen for concurrency, performance, and small binaries |
+| **Language** | Go 1.25.5 | All services, chosen for concurrency and safety |
 | **Event Streaming** | Redpanda (Kafka-compatible) | Durable event bus with exactly-once semantics |
 | **Database** | PostgreSQL 15 | Workflow state, rules, definitions, API keys |
 | **Cache/Locks** | Redis 7 | Idempotency keys, distributed locks, worker leases |
@@ -586,43 +673,42 @@ eventmesh/
 
 ---
 
-## Local Setup
+## Quick Start (Plug-and-Play) 🚀
 
-### Prerequisites
+The fastest way to experience EventMesh is using the unified Docker Compose stack. It starts all 6 core services, infrastructure (Redpanda, Postgres, Redis), and the observability suite (Prometheus, Grafana) with zero manual configuration.
 
-- **Go 1.25+**
-- **Docker** and **Docker Compose**
-
-### 1. Start Infrastructure
+### 1. Start everything
+`docker-compose.yml` is located in the `deployments/` directory.
 
 ```bash
 cd deployments
-docker compose up -d
+docker compose up --build -d
 ```
 
-This starts:
+### 2. Verify Observability
+Once the containers are healthy, access the **auto-provisioned** Grafana dashboard:
+- **URL**: [http://localhost:3000](http://localhost:3000)
+- **Login**: `admin` / `admin`
+- **Dashboard**: Search for "EventMesh Dashboard"
 
-- PostgreSQL on `localhost:5432` (user: `eventmesh`, password: `eventmesh`)
-- Redis on `localhost:6379`
-- Redpanda on `localhost:19092` (Kafka API)
+![EventMesh Dashboard Metrics](file:///Users/soham/.gemini/antigravity/brain/8babb75e-4276-4dcb-95b1-698ad84f7ab9/eventmesh_dashboard_metrics_1773942854081.png)
 
-### 2. Initialize the Database
-
-```bash
-psql -h localhost -U eventmesh -d eventmesh -f setup_db.sql
-```
-
-This creates 5 tables (`api_keys`, `rules`, `workflow_definitions`, `workflow_executions`, `workflow_step_executions`) and seeds demo data.
-
-### 3. Create Kafka Topics
+### 3. Trigger a test workflow
+Run the provided example to see the system in action:
 
 ```bash
-docker exec -it eventmesh-redpanda rpk topic create events workflow_triggers workflow_tasks workflow_task_results system_failures
+# Initialize the DB schema (first time only)
+cat setup_db.sql | docker exec -i eventmesh-postgres psql -U eventmesh -d eventmesh
+
+# Run the order workflow example
+go run examples/order-workflow/main.go
 ```
 
 ---
 
-## Running the System
+## Local Development
+
+If you prefer to run services manually for debugging:
 
 ### Start All Services
 
@@ -792,6 +878,7 @@ EventMesh was validated through **7 chaos scenarios** simulating real production
 | **Stage 4** | Execution Workers | ✅ Complete |
 | **Stage 5** | Observability & Reliability | ✅ Complete |
 | **Stage 6** | Scaling, Load Testing & Hardening | ✅ Complete |
+| **Stage 8** | Plug-and-Play Installation (Unified Docker) | ✅ Complete |
 
 ---
 
@@ -873,14 +960,14 @@ Propagating OpenTelemetry context across Kafka headers proved invaluable. Withou
 
 This is not a tutorial project with a REST API and a database. EventMesh demonstrates:
 
-1. **Distributed state management** — SQL-transactional state machine that survives crashes
-2. **Dual-layer idempotency** — Guarantees exactly-once processing across service boundaries
-3. **Event-driven architecture** — 5 services communicating exclusively through Kafka topics
-4. **Lease-based coordination** — Workers coordinate without a centralized lock manager
-5. **Production observability** — 11 Prometheus metrics, distributed tracing, structured logging
-6. **Chaos-tested resilience** — Validated under 7 failure scenarios with zero data loss
-7. **Multi-tenant design** — Complete tenant isolation at every layer
-8. **Real infrastructure patterns** — Mirrors architectures used at Temporal, Stripe, and Uber
+1. **Plug-and-Play Experience** — Zero-config setup for a 12-container distributed system.
+2. **Distributed state management** — SQL-transactional state machine that survives crashes.
+3. **Dual-layer idempotency** — Guarantees exactly-once processing across service boundaries.
+4. **Event-driven architecture** — 6 services communicating exclusively through Kafka topics.
+5. **Lease-based coordination** — Workers coordinate without a centralized lock manager.
+6. **Production observability** — Auto-provisioned Grafana dashboards with metrics and traces.
+7. **Chaos-tested resilience** — Validated under 7 failure scenarios with zero data loss.
+8. **Real infrastructure patterns** — Mirrored after architectures at Temporal, Stripe, and Uber.
 
 ---
 

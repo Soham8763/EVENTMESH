@@ -51,15 +51,14 @@ func (c *Client) RegisterWorkflow(ctx context.Context, w *Workflow) error {
 	return c.publisher.PublishToTopic(ctx, events.TopicWorkflowRegistrations, w.Name, event)
 }
 
-func (c *Client) StartWorkflow(ctx context.Context, workflowID string, executionID string) error {
-	event := events.WorkflowStartedEvent{
-		BaseEvent: events.BaseEvent{
-			EventID:     executionID,
-			EventType:   events.WorkflowStarted,
-			ExecutionID: executionID,
-		},
-		WorkflowID: workflowID,
+func (c *Client) StartWorkflow(ctx context.Context, workflowName string, executionID string) error {
+	event := events.WorkflowTriggerEvent{
+		TriggerID:     executionID,
+		EventID:       uuid.New().String(),
+		WorkflowName:  workflowName,
+		CorrelationID: executionID,
+		TriggeredAt:   time.Now(),
 	}
 
-	return c.publisher.Publish(ctx, executionID, event)
+	return c.publisher.PublishToTopic(ctx, events.TopicWorkflowTriggers, executionID, event)
 }

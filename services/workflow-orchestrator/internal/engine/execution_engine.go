@@ -32,7 +32,7 @@ func NewExecutionEngine(db *sql.DB, p *producer.Producer, fp *producer.FailurePr
 
 func (e *ExecutionEngine) HandleTrigger(
 	ctx context.Context,
-	trigger model.WorkflowTriggerEvent,
+	trigger events.WorkflowTriggerEvent,
 ) error {
 	tr := otel.Tracer("workflow-orchestrator")
 	ctx, span := tr.Start(ctx, "HandleTrigger")
@@ -96,6 +96,9 @@ func (e *ExecutionEngine) HandleTrigger(
 		TriggerID:  trigger.TriggerID,
 	})
 
+	metrics.WorkflowExecutions.Inc()
+	metrics.StepExecutions.WithLabelValues("workflow", "started").Inc()
+
 	metrics.WorkflowsStarted.Inc()
 
 	// Small delay to allow state-projector to populate the read-model
@@ -158,6 +161,8 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 			Error:    safelyGetError(r.Error),
 		})
 	}
+
+	metrics.StepExecutions.WithLabelValues(r.StepName, r.Status).Inc()
 
 
 	if r.Status == model.StepFailed {

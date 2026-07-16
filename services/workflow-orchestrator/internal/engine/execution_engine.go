@@ -52,7 +52,6 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	execID := uuid.New().String()
 
-
 	// Load workflow definition
 	var stepsJSON []byte
 
@@ -73,16 +72,38 @@ func (e *ExecutionEngine) HandleTrigger(
 		return err
 	}
 
+	// Write execution state directly in the orchestrator (source of truth)
+	_, err = tx.Exec(`
+		INSERT INTO workflow_executions
+		(id, workflow_name, status, created_at, tenant_id, trigger_id)
+		VALUES ($1, $2, 'RUNNING', $3, $4, $5)
+	`, execID, trigger.WorkflowName, time.Now(), trigger.TenantID, trigger.TriggerID)
+	if err != nil {
+		return err
+	}
+
+	// Insert all steps as PENDING
+	for i, step := range steps {
+		stepName, _ := step["step"].(string)
+		_, err := tx.Exec(`
+			INSERT INTO workflow_step_executions
+			(id, workflow_execution_id, step_name, status, step_index)
+			VALUES (gen_random_uuid(), $1, $2, 'PENDING', $3)
+		`, execID, stepName, i)
+		if err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	logger.Log.Info("workflow execution created (events only)",
+	logger.Log.Info("workflow execution created",
 		zap.String("execution_id", execID),
 		zap.String("workflow", trigger.WorkflowName))
 
-	// Emit WorkflowStarted event
+	// Emit WorkflowStarted event (for state-projector read model and audit trail)
 	e.publisher.Publish(ctx, execID, events.WorkflowStartedEvent{
 		BaseEvent: events.BaseEvent{
 			EventID:     uuid.New().String(),
@@ -98,13 +119,9 @@ func (e *ExecutionEngine) HandleTrigger(
 
 	metrics.WorkflowExecutions.Inc()
 	metrics.StepExecutions.WithLabelValues("workflow", "started").Inc()
-
 	metrics.WorkflowsStarted.Inc()
 
-	// Small delay to allow state-projector to populate the read-model
-	// In a real pure event processor, Advance would be triggered by a consumer
-	time.Sleep(100 * time.Millisecond)
-
+	// State is guaranteed to be in PostgreSQL — advance immediately
 	return e.AdvanceExecution(ctx, execID, trigger.CorrelationID)
 }
 
@@ -132,24 +149,8 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 	}
 	defer tx.Rollback()
 
-	// Emit Step Result event
-	eventType := events.StepCompleted
 	if r.Status == model.StepFailed {
-		eventType = events.StepFailed
-	}
-
-	if eventType == events.StepCompleted {
-		e.publisher.Publish(ctx, r.WorkflowExecutionID, events.StepCompletedEvent{
-			BaseEvent: events.BaseEvent{
-				EventID:     uuid.New().String(),
-				EventType:   events.StepCompleted,
-				ExecutionID: r.WorkflowExecutionID,
-				Timestamp:   time.Now(),
-			},
-			StepName: r.StepName,
-			Result:   r.Status,
-		})
-	} else {
+		// Emit StepFailed event for the state-projector
 		e.publisher.Publish(ctx, r.WorkflowExecutionID, events.StepFailedEvent{
 			BaseEvent: events.BaseEvent{
 				EventID:     uuid.New().String(),
@@ -160,15 +161,10 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 			StepName: r.StepName,
 			Error:    safelyGetError(r.Error),
 		})
-	}
 
-	metrics.StepExecutions.WithLabelValues(r.StepName, r.Status).Inc()
-
-
-	if r.Status == model.StepFailed {
+		metrics.StepExecutions.WithLabelValues(r.StepName, r.Status).Inc()
 
 		var retryCount int
-
 		err = tx.QueryRow(`
 			SELECT retry_count
 			FROM workflow_step_executions
@@ -181,7 +177,28 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 		}
 
 		if retryCount >= 3 {
+			// Max retries exceeded — mark workflow as FAILED
+			_, err = tx.Exec(`
+				UPDATE workflow_executions
+				SET status = $1, updated_at = NOW()
+				WHERE id = $2
+			`, model.WorkflowFailed, r.WorkflowExecutionID)
+			if err != nil {
+				return err
+			}
 
+			_, err = tx.Exec(`
+				UPDATE workflow_step_executions
+				SET status = $1, last_error = $2, updated_at = NOW()
+				WHERE workflow_execution_id = $3 AND step_name = $4
+			`, model.StepFailed, safelyGetError(r.Error), r.WorkflowExecutionID, r.StepName)
+			if err != nil {
+				return err
+			}
+
+			if err := tx.Commit(); err != nil {
+				return err
+			}
 
 			metrics.WorkflowsFailed.Inc()
 
@@ -193,22 +210,69 @@ func (e *ExecutionEngine) HandleResult(ctx context.Context, r model.TaskResult) 
 				Reason:        "retry_limit_exceeded",
 			})
 
-			return tx.Commit()
+			logger.Log.Error("workflow failed — retry limit exceeded",
+				zap.String("step", r.StepName),
+				zap.String("execution_id", r.WorkflowExecutionID),
+				zap.Int("retries", retryCount))
+
+			return nil
 		}
 
+		// Retriable failure — reset step to PENDING and increment retry count
+		_, err = tx.Exec(`
+			UPDATE workflow_step_executions
+			SET status = $1, retry_count = retry_count + 1, last_error = $2, updated_at = NOW()
+			WHERE workflow_execution_id = $3 AND step_name = $4
+		`, model.StepPending, safelyGetError(r.Error), r.WorkflowExecutionID, r.StepName)
+		if err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 
 		metrics.RetryCount.Inc()
-		logger.Log.Warn("step retried",
+		logger.Log.Warn("step failed, retrying",
 			zap.String("step", r.StepName),
 			zap.String("execution_id", r.WorkflowExecutionID),
+			zap.Int("retry_count", retryCount+1),
 			zap.String("correlation_id", r.CorrelationID))
+
+		// Re-advance to retry the step
+		return e.AdvanceExecution(ctx, r.WorkflowExecutionID, r.CorrelationID)
+	}
+
+	// Step succeeded — update status directly
+	_, err = tx.Exec(`
+		UPDATE workflow_step_executions
+		SET status = $1, updated_at = NOW()
+		WHERE workflow_execution_id = $2 AND step_name = $3
+	`, model.StepSuccess, r.WorkflowExecutionID, r.StepName)
+	if err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	return nil
+	// Emit StepCompleted event for the state-projector
+	e.publisher.Publish(ctx, r.WorkflowExecutionID, events.StepCompletedEvent{
+		BaseEvent: events.BaseEvent{
+			EventID:     uuid.New().String(),
+			EventType:   events.StepCompleted,
+			ExecutionID: r.WorkflowExecutionID,
+			Timestamp:   time.Now(),
+		},
+		StepName: r.StepName,
+		Result:   r.Status,
+	})
+
+	metrics.StepExecutions.WithLabelValues(r.StepName, r.Status).Inc()
+
+	// Advance to the next step
+	return e.AdvanceExecution(ctx, r.WorkflowExecutionID, r.CorrelationID)
 }
 
 func (e *ExecutionEngine) HandleWorkflowDefined(ctx context.Context, event events.WorkflowDefinedEvent) error {

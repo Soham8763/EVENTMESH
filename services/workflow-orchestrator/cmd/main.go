@@ -4,11 +4,14 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/signal"
+	"time"
 
 	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/pkg/tracing"
+	"eventmesh/workflow-orchestrator/internal/api"
 	"eventmesh/workflow-orchestrator/internal/consumer"
 	"eventmesh/workflow-orchestrator/internal/engine"
 	"eventmesh/workflow-orchestrator/internal/monitor"
@@ -74,7 +77,7 @@ func main() {
 	execEngine := engine.NewExecutionEngine(db, taskProducer, failureProducer, eventPublisher)
 
 	// Start stuck workflow checker
-	stuckChecker := monitor.NewStuckChecker(db)
+	stuckChecker := monitor.NewStuckChecker(db, execEngine.AdvanceExecution)
 
 	triggerConsumer, err := consumer.NewTriggerConsumer(
 		brokers,
@@ -109,11 +112,48 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize Management REST API
+	apiHandler := api.NewHandler(db)
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("/workflows", apiHandler.HandleWorkflows)
+	apiMux.HandleFunc("/workflows/", apiHandler.HandleWorkflows)
+	apiMux.HandleFunc("/executions", apiHandler.HandleExecutions)
+	apiMux.HandleFunc("/executions/", apiHandler.HandleExecutions)
+
+	apiSrv := &http.Server{
+		Addr:    ":8082",
+		Handler: apiMux,
+	}
+
+	go func() {
+		logger.Log.Info("orchestrator management API running on :8082")
+		if err := apiSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Error("management API server failed", zap.Error(err))
+		}
+	}()
+
 	go triggerConsumer.Start(ctx)
 	go resultConsumer.Start(ctx)
 	go registryConsumer.Start(ctx)
 	go stuckChecker.Start(ctx)
 
 	logger.Log.Info("orchestrator ready and consuming")
-	select {}
+
+	// Graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, os.Kill)
+	<-sig
+
+	logger.Log.Info("orchestrator shutting down...")
+	cancel()
+
+	// Shutdown HTTP Server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := apiSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Log.Error("management API shutdown failed", zap.Error(err))
+	}
+
+	time.Sleep(500 * time.Millisecond) // Allow active claims to finish
+	logger.Log.Info("orchestrator stopped")
 }

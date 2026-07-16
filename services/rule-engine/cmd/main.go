@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"time"
 
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
@@ -76,14 +77,36 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Background rule reloading loop (every 10 seconds)
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				activeRules, err := ruleRepo.LoadActiveRules()
+				if err != nil {
+					logger.Log.Error("failed to reload rules from database", zap.Error(err))
+					continue
+				}
+				m.Reload(activeRules)
+			}
+		}
+	}()
+
 	go eventConsumer.Start(ctx)
 
 	logger.Log.Info("rule-engine consuming from 'events' topic")
 
-	// Graceful shutdown
+	// Graceful shutdown handling
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	signal.Notify(sig, os.Interrupt, os.Kill) // standard sigs
 	<-sig
 
-	logger.Log.Info("rule-engine shutting down")
+	logger.Log.Info("rule-engine shutting down...")
+	cancel()
+	time.Sleep(500 * time.Millisecond) // Allow active claims to flush/exit
+	logger.Log.Info("rule-engine stopped")
 }

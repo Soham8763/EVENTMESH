@@ -1,11 +1,6 @@
--- EventMesh Schema Reference
--- For production use, run migrations via golang-migrate:
---   migrate -path ./migrations -database "postgres://..." up
---
--- This file is kept for quick local development:
---   cat setup_db.sql | docker exec -i eventmesh-postgres psql -U eventmesh -d eventmesh
+-- 000001_init_schema.up.sql
+-- Initial EventMesh schema (migrated from setup_db.sql)
 
--- Core Tables
 CREATE TABLE IF NOT EXISTS api_keys (
     id UUID PRIMARY KEY,
     api_key TEXT UNIQUE NOT NULL,
@@ -52,7 +47,7 @@ CREATE TABLE IF NOT EXISTS workflow_step_executions (
     UNIQUE (workflow_execution_id, step_name)
 );
 
--- Performance indexes
+-- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_workflow_executions_status ON workflow_executions(status);
 CREATE INDEX IF NOT EXISTS idx_workflow_executions_tenant ON workflow_executions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_step_executions_wf_id ON workflow_step_executions(workflow_execution_id);

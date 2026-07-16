@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/workflow-orchestrator/internal/model"
 
@@ -21,6 +22,7 @@ type ResultConsumer struct {
 	group  sarama.ConsumerGroup
 	topic  string
 	engine ResultHandler
+	dlq    *events.DLQPublisher
 }
 
 func NewResultConsumer(
@@ -38,10 +40,13 @@ func NewResultConsumer(
 		return nil, err
 	}
 
+	dlq := events.NewDLQPublisher(brokers, "orchestrator-results")
+
 	return &ResultConsumer{
 		group:  group,
 		topic:  topic,
 		engine: engine,
+		dlq:    dlq,
 	}, nil
 }
 
@@ -77,6 +82,7 @@ func (c *ResultConsumer) ConsumeClaim(
 
 		if err := json.Unmarshal(msg.Value, &result); err != nil {
 			logger.Log.Error("invalid result message", zap.Error(err))
+			c.dlq.Publish(ctx, msg.Topic, msg.Value, err)
 			session.MarkMessage(msg, "")
 			continue
 		}

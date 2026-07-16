@@ -27,6 +27,10 @@ func NewProducer(brokers []string, topic string) (*Producer, error) {
 	return &Producer{p, topic}, nil
 }
 
+func NewProducerWithSyncProducer(p sarama.SyncProducer, topic string) *Producer {
+	return &Producer{p, topic}
+}
+
 func (p *Producer) Publish(ctx context.Context, key string, v interface{}, optionalTopic ...string) error {
 	b, err := json.Marshal(v)
 	if err != nil {

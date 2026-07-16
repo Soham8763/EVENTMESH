@@ -23,6 +23,7 @@ type TriggerConsumer struct {
 	group  sarama.ConsumerGroup
 	topic  string
 	engine Engine
+	dlq    *events.DLQPublisher
 }
 
 func NewTriggerConsumer(
@@ -40,10 +41,13 @@ func NewTriggerConsumer(
 		return nil, err
 	}
 
+	dlq := events.NewDLQPublisher(brokers, "orchestrator-triggers")
+
 	return &TriggerConsumer{
 		group:  group,
 		topic:  topic,
 		engine: engine,
+		dlq:    dlq,
 	}, nil
 }
 
@@ -85,6 +89,7 @@ func (c *TriggerConsumer) ConsumeClaim(
 
 		if err := json.Unmarshal(msg.Value, &trigger); err != nil {
 			logger.Log.Error("invalid trigger message", zap.Error(err))
+			c.dlq.Publish(ctx, msg.Topic, msg.Value, err)
 			session.MarkMessage(msg, "")
 			continue
 		}
@@ -116,6 +121,7 @@ type RegistryConsumer struct {
 	group  sarama.ConsumerGroup
 	topic  string
 	engine Engine
+	dlq    *events.DLQPublisher
 }
 
 func NewRegistryConsumer(
@@ -133,10 +139,13 @@ func NewRegistryConsumer(
 		return nil, err
 	}
 
+	dlq := events.NewDLQPublisher(brokers, "orchestrator-registry")
+
 	return &RegistryConsumer{
 		group:  group,
 		topic:  topic,
 		engine: engine,
+		dlq:    dlq,
 	}, nil
 }
 
@@ -161,6 +170,7 @@ func (c *RegistryConsumer) ConsumeClaim(
 		var event events.WorkflowDefinedEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			logger.Log.Error("invalid registration message", zap.Error(err))
+			c.dlq.Publish(session.Context(), msg.Topic, msg.Value, err)
 			session.MarkMessage(msg, "")
 			continue
 		}

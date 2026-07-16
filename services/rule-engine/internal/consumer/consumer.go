@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/rule-engine/internal/matcher"
 	"eventmesh/rule-engine/internal/model"
@@ -23,6 +24,7 @@ type EventConsumer struct {
 	topic    string
 	matcher  *matcher.Matcher
 	producer *producer.Producer
+	dlq      *events.DLQPublisher
 }
 
 func NewEventConsumer(
@@ -40,11 +42,14 @@ func NewEventConsumer(
 		return nil, err
 	}
 
+	dlq := events.NewDLQPublisher(brokers, "rule-engine")
+
 	return &EventConsumer{
 		group:    group,
 		topic:    topic,
 		matcher:  matcher,
 		producer: producer,
+		dlq:      dlq,
 	}, nil
 }
 
@@ -79,6 +84,7 @@ func (c *EventConsumer) ConsumeClaim(
 
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			logger.Log.Error("failed to decode event", zap.Error(err))
+			c.dlq.Publish(ctx, msg.Topic, msg.Value, err)
 			span.End()
 			session.MarkMessage(msg, "")
 			continue

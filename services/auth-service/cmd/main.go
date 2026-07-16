@@ -36,6 +36,7 @@ func main() {
 	h := handler.NewHandler(repo)
 
 	http.HandleFunc("/validate", h.ValidateAPIKey)
+	http.HandleFunc("/token", h.IssueToken)
 
 	logger.Log.Info("auth-service running on :8081")
 	logger.Log.Fatal("service failure", zap.Error(http.ListenAndServe(":8081", nil)))

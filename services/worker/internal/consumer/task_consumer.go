@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"eventmesh/internal/events"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/worker/internal/executor"
@@ -25,6 +26,7 @@ type TaskConsumer struct {
 	registry *executor.Registry
 	producer *producer.Producer
 	store    *idempotency.Store
+	dlq      *events.DLQPublisher
 }
 
 func NewTaskConsumer(
@@ -45,12 +47,15 @@ func NewTaskConsumer(
 		return nil, err
 	}
 
+	dlq := events.NewDLQPublisher(brokers, "worker")
+
 	return &TaskConsumer{
 		group:    group,
 		topics:   topics,
 		registry: registry,
 		producer: producer,
 		store:    store,
+		dlq:      dlq,
 	}, nil
 }
 
@@ -88,6 +93,7 @@ func (c *TaskConsumer) ConsumeClaim(
 		var task model.WorkflowTask
 		if err := json.Unmarshal(msg.Value, &task); err != nil {
 			logger.Log.Error("invalid task message", zap.Error(err))
+			c.dlq.Publish(ctx, msg.Topic, msg.Value, err)
 			span.End()
 			session.MarkMessage(msg, "")
 			continue
@@ -100,49 +106,57 @@ func (c *TaskConsumer) ConsumeClaim(
 			attribute.String("correlation_id", task.CorrelationID),
 		)
 
-		// acquire idempotency lock
-		lockKey := "task_lock:" + task.TaskID
-		ok, err := c.store.Acquire(session.Context(), lockKey)
+		// 1. Check if this task was already completed successfully
+		doneKey := "task_done:" + task.TaskID
+		done, err := c.store.IsDone(session.Context(), doneKey)
 		if err != nil {
-			logger.Log.Error("idempotency error", zap.String("task_id", task.TaskID), zap.Error(err))
+			logger.Log.Error("completion check error", zap.String("task_id", task.TaskID), zap.Error(err))
+			span.End()
+			// Don't mark message — retry on next rebalance
 			continue
 		}
-		if !ok {
-			logger.Log.Warn("duplicate task ignored", zap.String("task_id", task.TaskID))
+		if done {
+			logger.Log.Info("task already completed, skipping", zap.String("task_id", task.TaskID))
+			span.End()
 			session.MarkMessage(msg, "")
 			continue
 		}
 
-		// acquire lease
+		// 2. Acquire lease (short TTL, auto-expires if worker crashes)
 		leaseKey := "lease:" + task.TaskID
-		ok, err = c.store.AcquireLease(session.Context(), leaseKey)
+		ok, err := c.store.AcquireLease(session.Context(), leaseKey)
 		if err != nil {
 			logger.Log.Error("lease error", zap.String("task_id", task.TaskID), zap.Error(err))
+			span.End()
 			continue
 		}
 		if !ok {
-			logger.Log.Info("task already leased", zap.String("task_id", task.TaskID))
+			logger.Log.Info("task already leased by another worker", zap.String("task_id", task.TaskID))
+			span.End()
+			// Don't mark message — let lease expire and another worker retry
 			continue
 		}
 
+		// 3. Look up executor
 		exec, err := c.registry.Get(task.StepName)
 		if err != nil {
 			logger.Log.Error("executor not found", zap.String("step", task.StepName), zap.Error(err))
 			_ = c.store.ReleaseLease(session.Context(), leaseKey)
+			span.End()
 			session.MarkMessage(msg, "")
 			continue
 		}
 
-		// execute task
+		// 4. Execute task
 		start := time.Now()
 		err = exec.Execute(ctx, task)
 		duration := time.Since(start).Seconds()
 
 		metrics.TasksProcessed.Inc()
 		metrics.TaskDuration.Observe(duration)
-		metrics.WorkerThroughput.WithLabelValues("worker-1", task.StepName).Inc() // Hardcoded worker-1 for now, in prod this would be os.Hostname()
+		metrics.WorkerThroughput.WithLabelValues("worker-1", task.StepName).Inc()
 
-		// prepare result
+		// 5. Prepare result
 		result := model.TaskResult{
 			TaskID:              task.TaskID,
 			WorkflowExecutionID: task.WorkflowExecutionID,
@@ -163,10 +177,14 @@ func (c *TaskConsumer) ConsumeClaim(
 			metrics.StepExecutions.WithLabelValues(task.StepName, "failed").Inc()
 		} else {
 			result.Status = "SUCCESS"
+			// Mark task as permanently completed — prevents re-execution
+			if markErr := c.store.MarkDone(session.Context(), doneKey); markErr != nil {
+				logger.Log.Error("failed to mark task as done", zap.Error(markErr))
+			}
 			metrics.StepExecutions.WithLabelValues(task.StepName, "completed").Inc()
 		}
 
-		// publish result
+		// 6. Publish result
 		logger.Log.Info("publishing result",
 			zap.String("status", result.Status),
 			zap.String("step", result.StepName),
@@ -176,7 +194,7 @@ func (c *TaskConsumer) ConsumeClaim(
 			logger.Log.Error("failed to publish result", zap.Error(err))
 		}
 
-		// release lease
+		// 7. Release lease and commit offset
 		_ = c.store.ReleaseLease(session.Context(), leaseKey)
 
 		span.End()

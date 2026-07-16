@@ -105,4 +105,7 @@ func main() {
 	<-sigterm
 
 	logger.Log.Info("worker shutting down...")
+	cancel()
+	time.Sleep(500 * time.Millisecond)
+	logger.Log.Info("worker stopped")
 }

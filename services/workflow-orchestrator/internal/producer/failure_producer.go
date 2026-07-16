@@ -37,6 +37,10 @@ func NewFailureProducer(brokers []string) (*FailureProducer, error) {
 	return &FailureProducer{producer: p, topic: "system_failures"}, nil
 }
 
+func NewFailureProducerWithSyncProducer(p sarama.SyncProducer) *FailureProducer {
+	return &FailureProducer{producer: p, topic: "system_failures"}
+}
+
 func (fp *FailureProducer) EmitFailure(ctx context.Context, event FailureEvent) {
 	event.Timestamp = time.Now().UTC().Format(time.RFC3339)
 

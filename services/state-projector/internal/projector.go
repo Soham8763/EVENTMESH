@@ -2,13 +2,15 @@ package internal
 
 import (
 	"context"
-	"log"
 
 	"eventmesh/internal/events"
 	"eventmesh/internal/kafka"
+	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 
 	"database/sql"
+
+	"go.uber.org/zap"
 )
 
 type Projector struct {
@@ -31,15 +33,31 @@ func NewProjector(db *sql.DB, brokers []string) *Projector {
 }
 
 func (p *Projector) Start(ctx context.Context) {
-	log.Println("state-projector: starting consumer for", events.TopicExecutionEvents)
+	logger.Log.Info("state-projector: starting consumer", zap.String("topic", events.TopicExecutionEvents))
 	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Info("state-projector: shutting down")
+			return
+		default:
+		}
+
 		msg, err := p.consumer.Read(ctx)
 		if err != nil {
-			log.Println("projection read error:", err)
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Log.Error("projection read error", zap.Error(err))
 			continue
 		}
 
-		p.handleEvent(msg.Value)
+		if err := p.handleEvent(msg.Value); err != nil {
+			logger.Log.Error("projection handler error, message will be retried on next restart",
+				zap.Error(err))
+			// Do not commit offset — the message will be re-delivered
+			continue
+		}
+
 		metrics.EventsProcessed.WithLabelValues("projected").Inc()
 	}
 }

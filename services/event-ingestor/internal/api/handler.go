@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/model"
 	"eventmesh/event-ingestor/internal/producer"
+	"eventmesh/event-ingestor/internal/ratelimit"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 
@@ -22,14 +24,18 @@ import (
 
 type Handler struct {
 	authClient       *auth.Client
+	jwtValidator     *auth.JWTValidator
 	idempotencyStore *idempotency.Store
+	rateLimiter      *ratelimit.Limiter
 	producer         *producer.Producer
 }
 
-func NewHandler(authClient *auth.Client, idempotencyStore *idempotency.Store, producer *producer.Producer) *Handler {
+func NewHandler(authClient *auth.Client, jwtValidator *auth.JWTValidator, idempotencyStore *idempotency.Store, rateLimiter *ratelimit.Limiter, producer *producer.Producer) *Handler {
 	return &Handler{
 		authClient:       authClient,
+		jwtValidator:     jwtValidator,
 		idempotencyStore: idempotencyStore,
+		rateLimiter:      rateLimiter,
 		producer:         producer,
 	}
 }
@@ -52,19 +58,37 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	))
 	defer span.End()
 
-	// 1. Extract API Key
-	apiKey := r.Header.Get("X-API-Key")
-	if apiKey == "" {
+	// 1. Authenticate (JWT first, fallback to API Key)
+	var tenantID string
+	var authErr error
+
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		tenantID, authErr = h.jwtValidator.ValidateToken(token)
+	} else {
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey == "" {
+			metrics.EventsRejected.Inc()
+			http.Error(w, "missing authentication token or API key", http.StatusUnauthorized)
+			return
+		}
+		tenantID, authErr = h.authClient.ValidateAPIKey(apiKey)
+	}
+
+	if authErr != nil {
 		metrics.EventsRejected.Inc()
-		http.Error(w, "missing api key", http.StatusUnauthorized)
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	// 2. Validate API Key
-	tenantID, err := h.authClient.ValidateAPIKey(apiKey)
+	// 2. Check Rate Limit (Fail Open for Availability)
+	allowed, err := h.rateLimiter.Allow(ctx, tenantID)
 	if err != nil {
+		logger.Log.Error("rate limiter error", zap.Error(err))
+	} else if !allowed {
 		metrics.EventsRejected.Inc()
-		http.Error(w, "invalid api key", http.StatusUnauthorized)
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
@@ -79,11 +103,13 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.EventType == "" {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "event_type is required", http.StatusBadRequest)
 		return
 	}
 
 	if req.Payload == nil {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "payload is required", http.StatusBadRequest)
 		return
 	}
@@ -91,17 +117,19 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	// 4. Extract Idempotency-Key
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	if idempotencyKey == "" {
+		metrics.EventsRejected.Inc()
 		http.Error(w, "Idempotency-Key header is required", http.StatusBadRequest)
 		return
 	}
 
-	// 5. Check Redis (exists?)
-	exists, err := h.idempotencyStore.Exists(ctx, idempotencyKey)
+	// 5. Atomic idempotency check-and-set (SetNX)
+	isNew, err := h.idempotencyStore.Acquire(ctx, idempotencyKey)
 	if err != nil {
+		logger.Log.Error("idempotency store error", zap.Error(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if exists {
+	if !isNew {
 		// Duplicate event — safe to return OK (prevents retry storms)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Request-ID", requestID)
@@ -123,9 +151,13 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		Payload:        req.Payload,
 	}
 
-	// 6.5. Publish envelope to Redpanda/Kafka
+	// 7. Publish envelope to Redpanda/Kafka
 	if err := h.producer.Publish(ctx, tenantID, envelope); err != nil {
 		logger.Log.Error("failed to publish event", zap.Error(err))
+		// Rollback the idempotency key so the client can retry
+		if releaseErr := h.idempotencyStore.Release(ctx, idempotencyKey); releaseErr != nil {
+			logger.Log.Error("failed to release idempotency key", zap.Error(releaseErr))
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -134,15 +166,9 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 		zap.String("tenant_id", tenantID),
 		zap.String("correlation_id", correlationID))
 
-	// 7. Set Redis key (TTL)
-	if err := h.idempotencyStore.Set(ctx, idempotencyKey); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
 	metrics.EventsProcessed.WithLabelValues("ingested").Inc()
 
-	// 8. Return 200
+	// 8. Return 202 Accepted
 	resp := model.IngestEventResponse{
 		Status:   "accepted",
 		TenantID: tenantID,
@@ -151,5 +177,6 @@ func (h *Handler) IngestEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Request-ID", requestID)
 	w.Header().Set("X-Correlation-ID", correlationID)
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(resp)
 }

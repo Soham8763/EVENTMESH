@@ -67,15 +67,24 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 	err = row.Scan(&stepID, &stepName)
 
 	if err == sql.ErrNoRows {
+		// All steps completed — mark workflow as COMPLETED
+		_, err = tx.Exec(`
+			UPDATE workflow_executions
+			SET status = $1, updated_at = NOW()
+			WHERE id = $2
+		`, model.WorkflowCompleted, execID)
+		if err != nil {
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 
 		metrics.WorkflowsCompleted.Inc()
-		metrics.WorkflowExecutions.Inc() // Or maybe this should only be on start? 
-		// Actually, the user's prompt says "workflow executions" usually means started. 
-		// I already added it to HandleTrigger. 
-		// I'll add StepExecutions for workflow completion though.
 		metrics.StepExecutions.WithLabelValues("workflow", "completed").Inc()
 
-		// Emit WorkflowCompleted event
+		// Emit WorkflowCompleted event (for state-projector read model)
 		e.publisher.Publish(ctx, execID, events.WorkflowCompletedEvent{
 			BaseEvent: events.BaseEvent{
 				EventID:     uuid.New().String(),
@@ -85,14 +94,25 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 			},
 		})
 
-		return tx.Commit()
+		logger.Log.Info("workflow completed",
+			zap.String("execution_id", execID))
+
+		return nil
 	}
 
 	if err != nil {
 		return err
 	}
 
-
+	// Mark the step as RUNNING directly in the database
+	_, err = tx.Exec(`
+		UPDATE workflow_step_executions
+		SET status = $1, updated_at = NOW()
+		WHERE id = $2
+	`, model.StepRunning, stepID)
+	if err != nil {
+		return err
+	}
 
 	// emit task to Kafka
 	task := model.WorkflowTask{
@@ -110,12 +130,16 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 		return err
 	}
 
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
 	logger.Log.Info("emitted task",
 		zap.String("step", stepName),
 		zap.String("execution_id", execID),
 		zap.String("correlation_id", correlationID))
 
-	// Emit StepScheduled event
+	// Emit StepScheduled event (for state-projector read model)
 	e.publisher.Publish(ctx, execID, events.StepScheduledEvent{
 		BaseEvent: events.BaseEvent{
 			EventID:     uuid.New().String(),
@@ -128,5 +152,5 @@ func (e *ExecutionEngine) AdvanceExecution(ctx context.Context, execID string, c
 
 	metrics.StepExecutions.WithLabelValues(stepName, "scheduled").Inc()
 
-	return tx.Commit()
+	return nil
 }

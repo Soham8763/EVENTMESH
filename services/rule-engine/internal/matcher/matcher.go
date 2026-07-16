@@ -1,10 +1,13 @@
 package matcher
 
 import (
+	"sync"
+
 	"eventmesh/rule-engine/internal/model"
 )
 
 type Matcher struct {
+	mu    sync.RWMutex
 	rules []model.Rule
 }
 
@@ -13,6 +16,9 @@ func NewMatcher(rules []model.Rule) *Matcher {
 }
 
 func (m *Matcher) Match(event model.EventEnvelope) []model.MatchResult {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var results []model.MatchResult
 
 	for _, rule := range m.rules {
@@ -36,4 +42,10 @@ func (m *Matcher) Match(event model.EventEnvelope) []model.MatchResult {
 	}
 
 	return results
+}
+
+func (m *Matcher) Reload(rules []model.Rule) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rules = rules
 }

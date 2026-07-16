@@ -381,36 +381,37 @@ Each step dispatched to a worker carries execution context:
 ### 1. Event Ingestion
 
 ```
-Client → POST /events (X-API-Key, Idempotency-Key, X-Correlation-ID)
+Client → POST /events (Authorization Bearer JWT or X-API-Key, Idempotency-Key, X-Correlation-ID)
 ```
 
-The **Event Ingestor** processes each request through an 8-step pipeline:
+The **Event Ingestor** processes each request through an optimized pipeline:
 
 1. Extract/generate `request_id` and `correlation_id` from headers
-2. Validate API key via Auth Service (HTTP call to `:8081`)
-3. Decode and validate the JSON request body
-4. Extract the `Idempotency-Key` header (required)
-5. Check Redis — if key exists, return `{"status": "duplicate"}` (HTTP 200)
-6. Build the enriched `EventEnvelope` with UUIDs and timestamps
-7. Publish the envelope to Redpanda's `events` topic (synchronous, ACK-after-persist)
-8. Set the idempotency key in Redis with TTL, then return `{"status": "accepted"}`
+2. Authenticate: Check for `Authorization: Bearer <token>` and validate the JWT signature offline (zero network/database hops). Fall back to HTTP validation via the Auth Service (`X-API-Key` to `:8081`)
+3. Check sliding-window rate limits (Redis sorted set checks per tenant ID; returns HTTP 429 if exceeded)
+4. Decode and validate the JSON request body
+5. Extract the `Idempotency-Key` header (required)
+6. Atomic check-and-set: Attempt to set the key in Redis (`SetNX`). If duplicate, immediately return `{"status": "duplicate"}` (HTTP 200)
+7. Build the enriched `EventEnvelope` with UUIDs and timestamps
+8. Publish the envelope to Redpanda's `events` topic asynchronously (returns HTTP 202 Accepted immediately, batching messages internally for ultra-high throughput). If publish fails, the Redis idempotency key is automatically deleted so the client can retry
+9. Return `{"status": "accepted"}` (HTTP 202)
 
 ### 2. Rule Matching
 
 The **Rule Engine** consumes from the `events` topic. For each event:
 
-1. Deserialize the `EventEnvelope`
-2. Run the `Matcher` — iterate all rules, filtering by `tenant_id` + `event_type`
+1. Deserialize the `EventEnvelope` (malformed payloads are routed to the `dead_letter_queue` topic and skipped)
+2. Run the `Matcher` — iterate active rules loaded in-memory, filtering by `tenant_id` + `event_type`. Rules are dynamically reloaded from PostgreSQL every 10 seconds without service restarts
 3. For each match, construct a `WorkflowTriggerEvent` with a unique `trigger_id`
 4. Publish the trigger to the `workflow_triggers` topic
 
 ### 3. Workflow Orchestration
 
-The **Orchestrator** consumes from `workflow_triggers`. For each trigger:
+The **Orchestrator** consumes from `workflow_triggers` (malformed payloads are routed to the `dead_letter_queue` topic). For each trigger:
 
-1. Create a `workflow_executions` row with status `CREATED`
+1. Create a `workflow_executions` row with status `RUNNING` directly in PostgreSQL (ensuring consistent state without timing delays)
 2. Load the workflow definition (steps JSONB) from Postgres
-3. Insert `workflow_step_executions` rows (one per step, status `PENDING`)
+3. Insert `workflow_step_executions` rows (one per step, status `PENDING` with step index)
 4. Commit the transaction
 5. Call `AdvanceExecution()` — the state machine
 
@@ -420,7 +421,7 @@ The **Orchestrator** consumes from `workflow_triggers`. For each trigger:
 2. If status is `COMPLETED` or `FAILED`, return (terminal states)
 3. Find the next `PENDING` step (ordered by `step_index`)
 4. If no pending steps remain → mark workflow `COMPLETED`
-5. Mark step as `RUNNING`, mark workflow as `RUNNING`
+5. Mark step as `RUNNING` directly in the database, mark workflow as `RUNNING`
 6. Publish a `WorkflowTask` to the `workflow_tasks` topic
 7. Commit the transaction
 
@@ -428,26 +429,27 @@ The **Orchestrator** consumes from `workflow_triggers`. For each trigger:
 
 The **Worker** consumes from `workflow_tasks`. For each task:
 
-1. Acquire an idempotency lock via Redis `SetNX` (`task_lock:{task_id}`)
-2. Acquire a worker lease via Redis `SetNX` (`lease:{task_id}`, 30s TTL)
+1. Check if the task was already completed successfully in Redis (`task_done:{task_id}`). If so, commit offset and skip
+2. Acquire a worker lease via Redis `SetNX` (`lease:{task_id}`, 30s TTL). If lease fails (leased by another worker), do not commit offset to allow re-delivery
 3. Look up the executor from the `Registry` by `step_name`
 4. Execute the step, measuring duration
 5. Construct a `TaskResult` (SUCCESS or FAILED)
-6. Publish the result to the `workflow_task_results` topic
-7. Release the lease
+6. On success: Mark the task permanently completed in Redis (`task_done:{task_id}`, 24h TTL)
+7. Publish the result to the `workflow_task_results` topic
+8. Release the lease and commit the Kafka offset
 
 ### 5. Result Handling
 
-The **Orchestrator** also consumes from `workflow_task_results`:
+The **Orchestrator** also consumes from `workflow_task_results` (malformed payloads are routed to the `dead_letter_queue` topic):
 
-- **On SUCCESS** → Call `AdvanceExecution()` to dispatch the next step
+- **On SUCCESS** → Update the step to `SUCCESS` in the database and call `AdvanceExecution()` to dispatch the next step
 - **On FAILURE** → Check retry count:
-  - If `retry_count < 3` → Increment counter, reset step to `PENDING`, log retry
-  - If `retry_count >= 3` → Mark workflow `FAILED`, emit to `system_failures` topic
+  - If `retry_count < 3` → Increment counter, reset step to `PENDING` in the database, log retry, and call `AdvanceExecution()` to re-dispatch the step
+  - If `retry_count >= 3` → Mark workflow `FAILED` and step `FAILED` in the database, commit, and emit to `system_failures` topic for visibility and alerts
 
 ---
 
-## Scalability Model
+## Scalability & Availability Model
 
 | Component | Scaling Strategy |
 |-----------|-----------------|
@@ -596,68 +598,83 @@ There is no service mesh, no distributed lock manager, and no leader election. C
 
 ```
 eventmesh/
+├── migrations/                         # SQL Schema Migrations (golang-migrate format)
+│   ├── 000001_init_schema.up.sql       # Schema generation & seed scripts
+│   └── 000001_init_schema.down.sql     # Schema teardown scripts
+│
+├── internal/
+│   ├── events/
+│   │   ├── dlq.go                      # Shared DLQPublisher (poison pill routing)
+│   │   └── ...
+│   └── kafka/
+│       └── ...
+│
 ├── services/
 │   ├── auth-service/                   # API key validation & tenant resolution
-│   │   ├── cmd/main.go                 # HTTP server on :8081
+│   │   ├── cmd/main.go                 # HTTP server on :8081 (IssueToken on /token)
 │   │   └── internal/
 │   │       ├── db/postgres.go          # Database connection
-│   │       ├── http/handler.go         # /validate endpoint
+│   │       ├── http/handler.go         # /validate and /token handlers
 │   │       └── repository/api_key_repo.go
 │   │
 │   ├── event-ingestor/                 # HTTP event intake pipeline
-│   │   ├── cmd/main.go                 # HTTP server on :8080, metrics on :2112
+│   │   ├── cmd/main.go                 # HTTP server on :8080 (JWT + API key fallbacks)
 │   │   └── internal/
-│   │       ├── api/handler.go          # 8-step ingestion pipeline
-│   │       ├── auth/client.go          # Auth service HTTP client
-│   │       ├── idempotency/redis.go    # Redis EXISTS + SET with TTL
-│   │       ├── model/envelope.go       # EventEnvelope struct
-│   │       ├── model/event.go          # Request/response models
-│   │       └── producer/redpanda.go    # Kafka sync producer
+│   │       ├── api/                        # HTTP handler
+│   │       │   ├── handler.go              # Rate-limited, async 9-step ingestion
+│   │       │   └── handler_test.go         # Offline unit tests for HTTP ingestor
+│   │       ├── auth/
+│   │       │   ├── client.go               # Backwards-compatible Auth API key client
+│   │       │   ├── jwt_validator.go        # Offline signature validation (high perf)
+│   │       │   └── jwt_validator_test.go   # JWT validation unit tests
+│   │       ├── idempotency/
+│   │       │   ├── redis.go                # Atomic SetNX lock + Release rollback
+│   │       │   └── redis_test.go           # Idempotency store integration checks
+│   │       ├── model/                      # Request/response structures
+│   │       └── producer/
+│   │           └── redpanda.go             # AsyncProducer wrapping Sarama (batch flushing)
 │   │
 │   ├── rule-engine/                    # Event → workflow trigger routing
-│   │   ├── cmd/main.go
+│   │   ├── cmd/main.go                 # Startup & periodic rules reloader (10s interval)
 │   │   └── internal/
-│   │       ├── consumer/consumer.go    # Kafka consumer (events topic)
-│   │       ├── matcher/matcher.go      # Tenant + event_type rule matching
-│   │       ├── model/                  # Rule, Event, Match, Trigger models
-│   │       ├── producer/producer.go    # Kafka producer (triggers topic)
-│   │       └── repository/             # PostgreSQL rule loading
+│   │       ├── consumer/
+│   │       │   └── consumer.go             # Kafka events consumer group client
+│   │       ├── matcher/
+│   │       │   ├── matcher.go              # Thread-safe matching (RWMutex protected)
+│   │       │   └── matcher_test.go         # Concurrency and matching tests
+│   │       └── ...
 │   │
 │   ├── workflow-orchestrator/          # Stateful workflow execution engine
-│   │   ├── cmd/main.go                 # Metrics on :2113, consumers, stuck checker
+│   │   ├── cmd/main.go                 # Consumer group startup & REST API server on :8082
 │   │   └── internal/
-│   │       ├── consumer/consumer.go    # Trigger consumer
-│   │       ├── consumer/result_consumer.go  # Result consumer
-│   │       ├── engine/engine.go        # Engine interface
-│   │       ├── engine/execution_engine.go   # HandleTrigger + HandleResult
-│   │       ├── engine/state_machine.go      # AdvanceExecution (SQL transactional)
-│   │       ├── engine/result_handler.go     # Result processing logic
-│   │       ├── model/                  # Status, Step, Task, Trigger, Workflow, Result
-│   │       ├── monitor/stuck_checker.go     # 30s interval, 5min threshold
-│   │       ├── producer/producer.go    # Task producer
-│   │       ├── producer/failure_producer.go # system_failures topic
-│   │       └── repository/            # Postgres workflow repo
+│   │       ├── api/
+│   │       │   └── handler.go              # REST Control Plane (definitions, executions, cancel)
+│   │       ├── consumer/
+│   │       │   ├── consumer.go             # trigger & registration Kafka consumers
+│   │       │   └── result_consumer.go      # worker result consumer group client
+│   │       ├── engine/
+│   │       │   ├── execution_engine.go     # HandleTrigger + HandleResult core engine
+│   │       │   ├── state_machine.go        # AdvanceExecution (SQL transactional)
+│   │       │   └── engine_test.go          # Database state machine integration tests
+│   │       ├── monitor/
+│   │       │   └── stuck_checker.go        # Stuck steps reset to PENDING and re-advancement
+│   │       └── ...
 │   │
 │   └── worker/                         # Distributed task executor
-│       ├── cmd/main.go
+│       ├── cmd/main.go                 # Graceful termination signal handler
 │       └── internal/
-│           ├── consumer/task_consumer.go    # Kafka consumer with idempotency + lease
-│           ├── executor/executor.go         # Executor interface
-│           ├── executor/registry.go         # Step → Executor mapping
-│           ├── executor/send_mail.go        # Example: send_welcome_email
-│           ├── executor/create_profile.go   # Example: provision_account
-│           ├── idempotency/redis.go         # SetNX lock + lease management
-│           ├── model/                       # Task, Result models
-│           └── producer/producer.go         # Result producer
+│           ├── consumer/
+│           │   └── task_consumer.go        # Kafka task consumer with Done-key safety
+│           ├── idempotency/
+│           │   └── redis.go                # Separated task lease and task completion locks
+│           └── ...
 │
-├── pkg/                                # Shared libraries
-│   ├── logger/logger.go                # Uber Zap structured logging
-│   ├── metrics/metrics.go              # 11 Prometheus metrics
-│   └── tracing/tracing.go             # OpenTelemetry initialization
+├── pkg/                                # Shared utility libraries
+│   ├── logger/logger.go                # Zap structured logging
+│   ├── metrics/metrics.go              # Prometheus collectors & definitions
+│   └── tracing/tracing.go              # OpenTelemetry Jaeger tracing
 │
 ├── deployments/
-│   └── docker-compose.yml             # Postgres, Redis, Redpanda
-│
 ├── docs/
 │   ├── Main_architecture.png          # System architecture diagram
 │   ├── diagram 2.png                  # Execution flow sequence diagram

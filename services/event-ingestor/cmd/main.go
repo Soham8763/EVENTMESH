@@ -1,19 +1,23 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
 	"eventmesh/event-ingestor/internal/api"
 	"eventmesh/event-ingestor/internal/auth"
 	"eventmesh/event-ingestor/internal/idempotency"
 	"eventmesh/event-ingestor/internal/producer"
+	"eventmesh/event-ingestor/internal/ratelimit"
 	"eventmesh/pkg/logger"
 	"eventmesh/pkg/metrics"
 	"eventmesh/pkg/tracing"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -62,14 +66,52 @@ func main() {
 		logger.Log.Fatal("failed to create producer", zap.Error(err))
 	}
 
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+	rateLimiter := ratelimit.NewLimiter(rdb)
+
+	jwtValidator := auth.NewJWTValidator()
+
 	handler := api.NewHandler(
 		authClient,
+		jwtValidator,
 		idempotencyStore,
+		rateLimiter,
 		eventProducer,
 	)
 
 	http.HandleFunc("/events", handler.IngestEvent)
 
-	logger.Log.Info("event-ingestor running on :8080")
-	logger.Log.Fatal("service failure", zap.Error(http.ListenAndServe(":8080", nil)))
+	srv := &http.Server{
+		Addr: ":8080",
+	}
+
+	go func() {
+		logger.Log.Info("event-ingestor running on :8080")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatal("service failure", zap.Error(err))
+		}
+	}()
+
+	// Graceful shutdown handling
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, os.Kill)
+	<-sig
+
+	logger.Log.Info("event-ingestor shutting down...")
+	
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Log.Error("event-ingestor http shutdown failed", zap.Error(err))
+	}
+	
+	// Close async producer to flush remaining messages
+	if err := eventProducer.Close(); err != nil {
+		logger.Log.Error("event-ingestor producer close failed", zap.Error(err))
+	}
+
+	logger.Log.Info("event-ingestor stopped")
 }
